@@ -30,6 +30,7 @@ var timer = setInterval(function () {
   if (state === 'idle') { an.drawFrame(0); }
   else if (state === 'turn') { drive(4, 7.8); }
   else if (state === 'finish') { drive(33, 38.0); an._freeze = 0.5; an._flash = 0.25; an.drawFrame(38.02); }
+  else if (state === 'end') { drive(36, an.endTime + 2.5); } // 賽後勝利者環繞鏡頭
   else { drive(15, 19); }
   document.title = 'ready';
 }, 60);

@@ -80,11 +80,46 @@
     this._buildRound();
   }
 
-  // —— 借用 2D 類別的共用數學與主迴圈（drawFrame 由本類別實作） ——
+  // —— 借用 2D 類別的共用數學與主迴圈（drawFrame/_finish/stop 由本類別實作） ——
   ['progressOf', 'distOf', 'rankingAt', 'lanePoint', '_checkMilestones', '_label',
-   'start', 'skip', 'stop', 'setSpeed', '_finish', 'drawIdle'].forEach(function (m) {
+   'start', 'skip', 'setSpeed', 'drawIdle'].forEach(function (m) {
     RaceAnimator3D.prototype[m] = RaceAnimator.prototype[m];
   });
+
+  // 完賽後不停格：繼續渲染「勝利者環繞」鏡頭（馬群自然收步、鏡頭繞著冠軍旋轉）
+  RaceAnimator3D.prototype._finish = function () {
+    this.running = false;
+    this.finished = true;
+    this._slowmo = false;
+    this.drawFrame(this.endTime);
+    if (this._raf) cancelAnimationFrame(this._raf);
+    if (this.opts.onFinish) this.opts.onFinish();
+    this._startPostLoop();
+  };
+
+  RaceAnimator3D.prototype._startPostLoop = function () {
+    var self = this;
+    this._post = true;
+    this._postT = 0;
+    var last = null;
+    function loop(now) {
+      if (!self._post) return;
+      if (last === null) last = now;
+      var dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      self._postT += dt;
+      self.drawFrame(self.endTime + self._postT);
+      self._postRaf = requestAnimationFrame(loop);
+    }
+    this._postRaf = requestAnimationFrame(loop);
+  };
+
+  RaceAnimator3D.prototype.stop = function () {
+    this.running = false;
+    this._post = false;
+    if (this._raf) cancelAnimationFrame(this._raf);
+    if (this._postRaf) cancelAnimationFrame(this._postRaf);
+  };
 
   RaceAnimator3D.prototype._setupGeometry = function () {
     // 世界座標：公尺。x 沿主直道，z 朝看台側，y 向上。
@@ -446,23 +481,117 @@
     return g;
   };
 
+  // 鞍布貼圖：圓筒展開圖（u = 繞馬身方向、v = 沿馬身方向）。
+  // 號碼印在左右側腹位置，各旋轉 90° 使其在曲面上直立。
   function clothTexture(horse) {
     var cv = document.createElement('canvas');
-    cv.width = 128; cv.height = 128;
+    cv.width = 512; cv.height = 256;
     var c = cv.getContext('2d');
     c.fillStyle = horse.color.bg;
-    c.fillRect(0, 0, 128, 128);
-    c.strokeStyle = 'rgba(0,0,0,0.4)';
-    c.lineWidth = 8;
-    c.strokeRect(4, 4, 120, 120);
-    c.fillStyle = horse.color.fg;
-    c.font = 'bold 86px Arial';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(String(horse.num), 64, 70);
+    c.fillRect(0, 0, 512, 256);
+    // 布面明暗（下襬略暗，營造垂墜立體感）
+    var g1 = c.createLinearGradient(0, 0, 512, 0);
+    g1.addColorStop(0, 'rgba(0,0,0,0.30)');
+    g1.addColorStop(0.25, 'rgba(0,0,0,0)');
+    g1.addColorStop(0.5, 'rgba(255,255,255,0.10)');
+    g1.addColorStop(0.75, 'rgba(0,0,0,0)');
+    g1.addColorStop(1, 'rgba(0,0,0,0.30)');
+    c.fillStyle = g1;
+    c.fillRect(0, 0, 512, 256);
+    // 鑲邊
+    c.strokeStyle = 'rgba(255,255,255,0.85)';
+    c.lineWidth = 10;
+    c.strokeRect(5, 5, 502, 246);
+    function stamp(u, rot) { // u: 貼圖橫向中心(0..1)，rot: 讓號碼在側腹直立
+      c.save();
+      c.translate(u * 512, 128);
+      c.rotate(rot);
+      c.fillStyle = horse.color.fg;
+      c.font = 'bold 120px Arial';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText(String(horse.num), 0, 8);
+      c.restore();
+    }
+    stamp(0.25, Math.PI / 2);   // 一側
+    stamp(0.75, -Math.PI / 2);  // 另一側
     var t = new THREE.CanvasTexture(cv);
     t.encoding = THREE.sRGBEncoding;
     return t;
+  }
+
+  // 騎師：骨架式關節人形（兩點間生成肢段，關節相連），競賽蹲姿
+  function buildJockey(silksColor, hw) {
+    var silks = new THREE.MeshLambertMaterial({ color: silksColor });
+    var pants = new THREE.MeshLambertMaterial({ color: 0xf1f3f5 });
+    var boots = new THREE.MeshLambertMaterial({ color: 0x23201d });
+    var skin = new THREE.MeshLambertMaterial({ color: 0xe8c39e });
+    var glove = new THREE.MeshLambertMaterial({ color: 0x2b2118 });
+    var jk = new THREE.Group();
+
+    function seg(parent, a, b, r, mat) { // 在 a→b 之間生成一節肢段（膠囊自動轉向）
+      var dir = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      var len = dir.length();
+      var mesh = new THREE.Mesh(
+        new THREE.CapsuleGeometry(r, Math.max(0.01, len - r), 3, 8), mat);
+      mesh.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      mesh.castShadow = true;
+      parent.add(mesh);
+      return mesh;
+    }
+    function ball(parent, p, r, mat) {
+      var m = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), mat);
+      m.position.set(p[0], p[1], p[2]);
+      m.castShadow = true;
+      parent.add(m);
+      return m;
+    }
+
+    var hip = [0, 0.14, -0.14];
+    var shoulder = [0, 0.42, 0.18];
+    var headC = [0, 0.50, 0.34];
+    // 軀幹（前傾脊柱）與骨盆
+    ball(jk, hip, 0.095, pants);
+    seg(jk, hip, shoulder, 0.105, silks);
+    ball(jk, shoulder, 0.10, silks);
+    // 頸與頭
+    seg(jk, [0, 0.44, 0.22], headC, 0.045, skin);
+    ball(jk, headC, 0.085, skin);
+    var helmet = new THREE.Mesh(
+      new THREE.SphereGeometry(0.10, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), silks);
+    helmet.position.set(headC[0], headC[1] + 0.015, headC[2] - 0.01);
+    helmet.rotation.x = 0.5; // 順著前傾視線戴
+    jk.add(helmet);
+    var goggles = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.028, 0.012), glove);
+    goggles.position.set(0, 0.515, 0.415);
+    jk.add(goggles);
+    // 雙腿：高抬膝蹲姿（大腿前伸、小腿貼身後收、靴踩鐙）
+    [-1, 1].forEach(function (s) {
+      var hipS = [s * 0.09, 0.12, -0.10];
+      var knee = [s * 0.14, 0.15, 0.20];
+      var heel = [s * 0.16, -0.12, 0.08];
+      seg(jk, hipS, knee, 0.062, pants);
+      seg(jk, knee, heel, 0.05, boots);
+      seg(jk, heel, [heel[0], heel[1] - 0.015, heel[2] + 0.11], 0.042, boots); // 靴尖
+    });
+    // 左臂（拉韁）
+    var shL = [-0.11, 0.40, 0.18], elbL = [-0.15, 0.27, 0.32], handL = [-0.09, 0.21, 0.47];
+    seg(jk, shL, elbL, 0.048, silks);
+    seg(jk, elbL, handL, 0.042, silks);
+    ball(jk, handL, 0.05, glove);
+    // 右臂 + 馬鞭（以肩為轉軸，可揮動）
+    var whipArm = new THREE.Group();
+    whipArm.position.set(0.11, 0.40, 0.18);
+    var elbR = [0.05, -0.13, 0.13], handR = [0.0, -0.19, 0.29];
+    seg(whipArm, [0, 0, 0], elbR, 0.048, silks);
+    seg(whipArm, elbR, handR, 0.042, silks);
+    ball(whipArm, handR, 0.05, glove);
+    seg(whipArm, handR, [handR[0] + 0.02, handR[1] + 0.14, handR[2] - 0.20], 0.011, boots); // 短鞭
+    whipArm.rotation.x = -0.4;
+    jk.add(whipArm);
+
+    return { group: jk, whipArm: whipArm };
   }
 
   RaceAnimator3D.prototype._buildHorses = function () {
@@ -483,64 +612,26 @@
       var g = new THREE.Group();
       g.add(inner);
 
-      // 號碼布（兩側貼合側腹）——掛在外層群組：+Z 恆為行進方向、±X 為側面
+      // 鞍布：包裹馬腹的弧形布面（上窄下襬微張），號碼印在兩側曲面上
       var ct = clothTexture(horse);
-      var clothGeo = new THREE.PlaneGeometry(0.72, 0.6);
       var hw = assets.halfWidth || 0.34;
       var backH = assets.backHeight || 1.5;
-      [1, -1].forEach(function (side) {
-        var cloth = new THREE.Mesh(clothGeo,
-          new THREE.MeshLambertMaterial({ map: ct, side: THREE.DoubleSide }));
-        cloth.position.set(side * hw, backH - 0.32, -0.1);
-        cloth.rotation.y = side * Math.PI / 2;
-        g.add(cloth);
-      });
+      // θ 以馬背為中心包約 235°，開口朝腹部下方；下襬微張營造垂墜
+      var clothGeo = new THREE.CylinderGeometry(hw + 0.04, hw + 0.07, 0.72, 28, 1, true,
+        Math.PI * 0.35, Math.PI * 1.3);
+      clothGeo.rotateX(Math.PI / 2); // 圓筒軸轉為沿馬身方向
+      var cloth = new THREE.Mesh(clothGeo, new THREE.MeshLambertMaterial({ map: ct }));
+      cloth.position.set(0, backH - hw * 0.8, -0.05);
+      cloth.castShadow = true;
+      g.add(cloth);
 
-      // 騎師（貼背前傾蹲姿，彩衣同鞍布色）——掛在馬背基準點，整組做騎乘律動
-      var jk = new THREE.Group();
-      jk.position.set(0, backH, 0);
-      var silks = new THREE.MeshLambertMaterial({ color: horse.color.bg });
-      var body = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, 0.34, 3, 8), silks);
-      body.rotation.x = 1.25; // 壓低貼近馬背
-      body.position.set(0, 0.22, 0.05);
-      body.castShadow = true;
-      jk.add(body);
-      var head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8),
-        new THREE.MeshLambertMaterial({ color: 0xe8c39e }));
-      head.position.set(0, 0.38, 0.36);
-      jk.add(head);
-      var helmet = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8, 0, Math.PI * 2, 0, 1.7), silks);
-      helmet.position.set(0, 0.42, 0.36);
-      jk.add(helmet);
-      [-0.22, 0.22].forEach(function (sxn) {
-        var thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.26, 2, 6),
-          new THREE.MeshLambertMaterial({ color: 0xf1f3f5 }));
-        thigh.position.set(sxn, -0.05, 0.12);
-        thigh.rotation.x = 1.1;
-        jk.add(thigh);
-      });
-      // 左手（拉韁，固定前伸）
-      var armL = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.28, 2, 6), silks);
-      armL.position.set(-0.17, 0.26, 0.28);
-      armL.rotation.x = 1.15;
-      jk.add(armL);
-      // 右手 + 馬鞭（可揮動：以肩為轉軸）
-      var whipArm = new THREE.Group();
-      whipArm.position.set(0.18, 0.32, 0.18); // 肩
-      var armR = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.26, 2, 6), silks);
-      armR.position.set(0, -0.1, 0.1);
-      armR.rotation.x = 0.8;
-      whipArm.add(armR);
-      var whip = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.55, 5),
-        new THREE.MeshLambertMaterial({ color: 0x2b2118 }));
-      whip.position.set(0, -0.18, 0.32);
-      whip.rotation.x = 1.35;
-      whipArm.add(whip);
-      whipArm.rotation.x = -0.4;
-      jk.add(whipArm);
+      // 騎師：關節人形（競賽蹲姿），掛在馬背基準點，整組做騎乘律動
+      var built = buildJockey(horse.color.bg, hw);
+      var jk = built.group;
+      jk.position.set(0, backH, 0.08); // 略前坐於鞍上
       g.add(jk);
       g.userData.jockey = jk;
-      g.userData.whipArm = whipArm;
+      g.userData.whipArm = built.whipArm;
       g.userData.whipT = 0;
 
       shared.horsesGroup.add(g);
@@ -584,10 +675,12 @@
       var leadD = this.distOf(ranking[0], time);
       var T3 = this.T[this.finishOrder[Math.min(2, n - 1)]];
       if (time > T3 + 0.6) {
-        shot = 'wide'; // 前三名抵達後：高機位回看終點，看後續馬完賽
-        var wp = this.pathPt(this.P0 + 40, 34);
-        posT.set(wp.x, 16, wp.z);
-        lookT.set(this.finishX - 18, 1.5, this.lane0R - 6);
+        shot = 'winner'; // 賽後：鏡頭緩慢環繞減速中的冠軍馬（勝利者畫面）
+        var w = this.finishOrder[0];
+        var pw = this.lanePoint(w, this.progressOf(w, time));
+        var ang = time * 0.22;
+        posT.set(pw.x + Math.cos(ang) * 10, 3.4, pw.y + Math.sin(ang) * 10);
+        lookT.set(pw.x, 1.5, pw.y);
       } else if (leadD > this.P0 - 115) {
         shot = 'finish'; // 終點固定機位：馬群迎面衝來壓線
         var fp = this.pathPt(this.P0 + 16, 13);
@@ -649,8 +742,8 @@
         ud.jockey.position.y = baseY + Math.sin(cyc) * 0.07 * amp;
         ud.jockey.position.z = 0.05 * Math.sin(cyc + 0.6) * amp;
         ud.jockey.rotation.x = 0.08 * Math.sin(cyc + 1.1) * amp;
-        if (moving && prog > 0.55 && ud.whipT <= 0 && Math.random() < dt * 0.5) {
-          ud.whipT = 0.5; // 平均約每 2 秒揮鞭一次，各馬隨機
+        if (moving && prog > 0.55 && prog < 1 && ud.whipT <= 0 && Math.random() < dt * 0.5) {
+          ud.whipT = 0.5; // 平均約每 2 秒揮鞭一次，各馬隨機；過線後收鞭
         }
         if (ud.whipT > 0) {
           ud.whipT -= dt;

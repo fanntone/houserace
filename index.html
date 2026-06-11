@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>皇冠賽馬場 — 公平賽馬機</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">🏇 皇冠賽馬場</div>
+  <div class="pill" id="roundNo">第 1 場</div>
+  <div class="pill phase" id="phasePill">下注中</div>
+  <div class="spacer"></div>
+  <div class="balance">💰 <span id="balance">10,000</span> 點</div>
+  <button class="icon-btn" id="btnSettings" title="設定">⚙</button>
+  <button class="icon-btn help-btn" id="btnHelp" title="玩法說明">？</button>
+</header>
+
+<main>
+  <section id="left">
+    <div class="tabs" id="betTabs">
+      <button class="tab active" data-type="win">獨贏</button>
+      <button class="tab" data-type="place">位置</button>
+      <button class="tab" data-type="quinella">連贏</button>
+      <button class="tab" data-type="exacta">二重彩</button>
+    </div>
+    <div class="type-hint" id="typeHint"></div>
+    <div id="oddsArea"></div>
+
+    <div id="ticket" class="ticket hidden">
+      <div class="ticket-sel">
+        <span id="ticketDesc"></span>
+        <span class="ticket-odds">@<b id="ticketOdds"></b></span>
+      </div>
+      <div class="chips">
+        <button class="chip" data-v="10">+10</button>
+        <button class="chip" data-v="50">+50</button>
+        <button class="chip" data-v="100">+100</button>
+        <button class="chip" data-v="500">+500</button>
+        <button class="chip clear" data-v="0">清除</button>
+      </div>
+      <div class="ticket-foot">
+        <span>金額 <b id="ticketAmount">0</b></span>
+        <span>可派彩 <b id="ticketPotential">0</b></span>
+        <button id="btnConfirmBet" class="primary" disabled>確認下注</button>
+      </div>
+    </div>
+
+    <div id="brokeBanner" class="broke hidden">點數不足！請按右上 ⚙ 重置錢包。</div>
+    <div id="betList"></div>
+  </section>
+
+  <section id="right">
+    <div id="trackWrap">
+      <canvas id="track" width="920" height="440"></canvas>
+      <canvas id="overlay" width="920" height="440"></canvas>
+      <div id="countdownOverlay">
+        <div class="cd-text">下注時間 <b id="countdown">45</b> 秒</div>
+        <button id="btnStartNow">直接開賽 ▶</button>
+      </div>
+      <div id="speedCtrl" class="hidden">
+        <button class="spd active" data-speed="1">×1</button>
+        <button class="spd" data-speed="2">×2</button>
+        <button class="spd" data-speed="4">×4</button>
+        <button id="btnSkipRace">跳至結果 ⏭</button>
+      </div>
+    </div>
+    <div id="liveBar">
+      <div class="live-top">
+        <div id="commentary">歡迎光臨皇冠賽馬場！請在左側下注，或純觀賽。</div>
+        <button class="icon-btn voice-btn" id="btnVoice" title="語音旁述開關">🔊</button>
+      </div>
+      <ol id="rankBoard"></ol>
+    </div>
+  </section>
+</main>
+
+<footer id="fairBar">
+  <span class="fair-label">🔒 公平驗證</span>
+  <span class="fair-item">本場賽果雜湊（下注前已鎖定）：<code id="fairHash">—</code></span>
+  <span class="fair-item hidden" id="fairSeedWrap">上一場種子：<code id="fairSeed"></code>
+    <button class="small" id="btnVerify">驗證</button>
+  </span>
+</footer>
+
+<!-- ====== 結果面板 ====== -->
+<div class="modal hidden" id="resultModal">
+  <div class="modal-box">
+    <h2 id="resultTitle">賽果</h2>
+    <div id="resultPodium"></div>
+    <div id="resultBets"></div>
+    <div id="resultTotals"></div>
+    <div class="fair-line">🔒 種子已公開：<code id="resultSeed"></code>
+      <button class="small" id="btnVerifyFromResult">驗證本場</button>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="btnNextRound">下一場 ▶</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== 驗證詳情 ====== -->
+<div class="modal hidden" id="verifyModal">
+  <div class="modal-box">
+    <h2>公平性驗證</h2>
+    <div id="verifyBody"></div>
+    <div class="modal-actions">
+      <button id="btnCloseVerify">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== 設定 ====== -->
+<div class="modal hidden" id="settingsModal">
+  <div class="modal-box">
+    <h2>⚙ 設定</h2>
+    <div class="setting-row">
+      <label>派彩率（下一場生效）</label>
+      <select id="setRtp">
+        <option value="1">100%（數學公平，期望值為零）</option>
+        <option value="0.97">97%</option>
+        <option value="0.92">92%（仿實體機台）</option>
+        <option value="0.85">85%</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <label>每場馬匹數（下一場生效）</label>
+      <select id="setHorses">
+        <option value="6">6 匹</option>
+        <option value="8" selected>8 匹</option>
+        <option value="10">10 匹</option>
+        <option value="12">12 匹</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <label>比賽長度</label>
+      <select id="setDuration">
+        <option value="22">短（約 25 秒）</option>
+        <option value="38" selected>標準（約 40 秒）</option>
+        <option value="55">長（約 60 秒）</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <label>錢包</label>
+      <button id="btnResetWallet">重置錢包（回到 10,000 點）</button>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="btnCloseSettings">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== 玩法說明 ====== -->
+<div class="modal hidden" id="helpModal">
+  <div class="modal-box wide">
+    <h2>？ 玩法說明</h2>
+    <div class="tabs" id="helpTabs">
+      <button class="tab active" data-tab="h1">怎麼玩</button>
+      <button class="tab" data-tab="h2">投注玩法</button>
+      <button class="tab" data-tab="h3">賠率與派彩</button>
+      <button class="tab" data-tab="h4">公平機制</button>
+    </div>
+    <div class="help-page" id="h1">
+      <h3>遊戲流程</h3>
+      <ol>
+        <li>每場比賽由數匹馬出賽（預設 8 匹），每匹馬的實力與賠率每場重新產生。</li>
+        <li><b>下注階段</b>：在左側選擇玩法分頁 → 點選馬匹（或組合格）→ 按籌碼加金額 → 「確認下注」。可同場下多注，下注後可按 ✕ 取消退款。</li>
+        <li>倒數結束或按「直接開賽 ▶」後比賽開始，途中可加速或直接跳至結果。</li>
+        <li>賽果揭曉後自動派彩，按「下一場」繼續。</li>
+      </ol>
+      <h3>點數</h3>
+      <p>起始 10,000 點，純屬虛擬遊戲點數、與真錢無關。點數會自動存檔；輸光了可在 ⚙ 設定重置。</p>
+    </div>
+    <div class="help-page hidden" id="h2">
+      <h3>四種玩法</h3>
+      <table class="help-table">
+        <tr><th>玩法</th><th>中獎條件</th><th>例子</th></tr>
+        <tr><td><b>獨贏</b></td><td>猜中第 1 名</td><td>買 3號，3號跑第一即中</td></tr>
+        <tr><td><b>位置</b></td><td>所買的馬跑進<b>前三名</b>（少於 7 匹馬時為前二名）</td><td>買 3號，3號跑第一、二或三都中</td></tr>
+        <tr><td><b>連贏</b></td><td>猜中前兩名的兩匹馬，<b>不分先後</b></td><td>買 3-7，前兩名是 3 和 7（誰先都行）即中</td></tr>
+        <tr><td><b>二重彩</b></td><td><b>依順序</b>猜中第 1、2 名</td><td>買 3→7，必須 3 第一且 7 第二</td></tr>
+      </table>
+      <p>難度：位置 &lt; 獨贏 &lt; 連贏 &lt; 二重彩。越難中，賠率越高。</p>
+    </div>
+    <div class="help-page hidden" id="h3">
+      <h3>賠率怎麼看</h3>
+      <p>本遊戲用<b>小數賠率</b>：派彩 = 注金 × 賠率（已含本金）。<br>
+      例：押 100 點、賠率 4.50，中獎拿回 450 點，淨贏 350 點。</p>
+      <h3>賠率怎麼來</h3>
+      <p>每場開賽前系統隨機產生各馬實力，用 Plackett-Luce 公式<b>精確算出</b>每種結果的真實機率，
+      然後 <b>賠率 = 派彩率 ÷ 真實機率</b>。</p>
+      <p>派彩率預設 <b>100%</b>：期望值為零，長期玩不賺不賠——這就是數學上的公平。
+      想體驗真實機台的莊家優勢，可在 ⚙ 設定調成 92%。</p>
+      <p>表格中的「勝率／入位率」欄位顯示的就是真實機率，本遊戲不隱藏任何資訊。</p>
+    </div>
+    <div class="help-page hidden" id="h4">
+      <h3>與實體機台的不同</h3>
+      <p>實體賽馬機台內建約 92% 派彩率，還會動態調整賠率把派彩拉回目標值（俗稱「吃分吐分」）。
+      本遊戲<b>沒有</b>這些機制：賠率由公式直接算出，賽果獨立隨機抽出。</p>
+      <h3>可驗證公平（Provably Fair）</h3>
+      <ol>
+        <li>每場下注開始前，系統先隨機產生「種子」，並把種子的 <b>SHA-256 雜湊</b>（數位指紋）顯示在畫面下方——賽果此刻已被鎖定。</li>
+        <li>賽後公開種子。按「驗證」即可確認：<br>① 種子算出的雜湊與下注前公布的一致；<br>② 用種子重新計算，可重現一模一樣的馬匹、賠率與名次。</li>
+        <li>因此系統不可能在你下注後更改賽果。比賽中的領先變化只是動畫演出，衝線結果由種子決定。</li>
+      </ol>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="btnCloseHelp">開始遊戲 ▶</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/rng.js"></script>
+<script src="js/model.js"></script>
+<script src="js/betting.js"></script>
+<script src="js/race.js"></script>
+<script src="vendor/three.min.js"></script>
+<script src="vendor/GLTFLoader.js"></script>
+<script src="js/assets/horse-glb.js"></script>
+<script src="js/race3d.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

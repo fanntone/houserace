@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($dom = Get-Content \"$env:TEMP\\\\hr_dom.html\" -Raw -Encoding UTF8; $hash = if \\($dom -match 'id=\"fairHash\">\\([^<]+\\)<'\\) { $matches[1] } else { 'MISSING' }; Write-Output \"fairHash: $hash\"; Write-Output \\(\"odds rows: \" + \\([regex]::Matches\\($dom, 'class=\"pickable\"'\\)\\).Count\\); Write-Output \\(\"rankBoard items: \" + \\([regex]::Matches\\($dom, 'rb-pos'\\)\\).Count\\); Write-Output \\(\"numchips: \" + \\([regex]::Matches\\($dom, 'numchip'\\)\\).Count\\); $cd = if \\($dom -match 'id=\"countdown\">\\(\\\\d+\\)<'\\) { $matches[1] } else { 'MISSING' }; Write-Output \"countdown: $cd\"; Write-Output \\(\"helpModal visible: \" + \\($dom -match 'id=\"helpModal\" class=\"modal\"'\\)\\))"
+    ]
+  }
+}

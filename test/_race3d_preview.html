@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>race3d preview</title></head>
+<body style="background:#11151c;margin:0">
+<div style="position:relative;width:920px">
+  <canvas id="t" width="920" height="440" style="display:block"></canvas>
+</div>
+<script src="../js/rng.js"></script>
+<script src="../js/model.js"></script>
+<script src="../js/race.js"></script>
+<script src="../vendor/three.min.js"></script>
+<script src="../vendor/GLTFLoader.js"></script>
+<script src="../js/assets/horse-glb.js"></script>
+<script src="../js/race3d.js"></script>
+<script>
+// ?state=idle|mid|turn|finish（預設 mid）；?yaw=0|90|180|270 校正馬模型朝向
+var state = (location.search.match(/state=(\w+)/) || [])[1] || 'mid';
+var yawParam = (location.search.match(/yaw=(-?\d+)/) || [])[1];
+if (yawParam !== undefined) window.HORSE_YAW = parseInt(yawParam, 10) * Math.PI / 180;
+var round = Model.buildRound('a1b2c3d4e5f60718a1b2c3d4e5f60718', 8, 1.0);
+var an = new RaceAnimator3D(document.getElementById('t'), round.horses, round.finishOrder,
+  { duration: 38, infieldText: '第 1 場', infieldSub: '派彩率 100%' });
+
+function drive(from, to) { // 連續推進讓鏡頭/動畫收斂
+  for (var t = from; t < to; t += 0.05) an.drawFrame(t);
+  an.drawFrame(to);
+}
+var timer = setInterval(function () {
+  if (!an._horses3d || an._horses3d.length === 0) return; // 等馬模型解析完
+  clearInterval(timer);
+  if (state === 'idle') { an.drawFrame(0); }
+  else if (state === 'turn') { drive(4, 7.8); }
+  else if (state === 'finish') { drive(33, 38.0); an._freeze = 0.5; an._flash = 0.25; an.drawFrame(38.02); }
+  else { drive(15, 19); }
+  document.title = 'ready';
+}, 60);
+</script>
+</body></html>

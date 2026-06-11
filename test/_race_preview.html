@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>race preview</title></head>
+<body style="background:#11151c;margin:0;color:#9aa3b2;font:12px sans-serif">
+<div>① 待機（閘門特寫 ×1.5）</div>
+<canvas id="c0" width="920" height="440"></canvas>
+<div>② 比賽中段（後直道）</div>
+<canvas id="c1" width="920" height="440"></canvas>
+<div>③ 終點壓線定格</div>
+<canvas id="c2" width="920" height="440"></canvas>
+<div>④ 過彎（欄杆弧形 + 馬匹內傾 + 樹林背景）</div>
+<canvas id="c3" width="920" height="440"></canvas>
+<script src="../js/rng.js"></script>
+<script src="../js/model.js"></script>
+<script src="../js/race.js"></script>
+<script>
+function settleCam(an, from, to) { // 連續呼叫讓鏡頭平滑收斂到目標
+  for (var t = from; t < to; t += 0.05) an.drawFrame(t);
+  an.drawFrame(to);
+}
+var round = Model.buildRound('a1b2c3d4e5f60718a1b2c3d4e5f60718', 8, 1.0);
+var only = (location.search.match(/state=(\w+)/) || [])[1] || null; // ?state=idle|mid|finish 只顯示單一畫面
+
+var an0 = new RaceAnimator(document.getElementById('c0'), round.horses, round.finishOrder,
+  { duration: 38 });
+an0.drawIdle();
+
+var an1 = new RaceAnimator(document.getElementById('c1'), round.horses, round.finishOrder,
+  { duration: 38 });
+settleCam(an1, 15, 19);
+
+var an2 = new RaceAnimator(document.getElementById('c2'), round.horses, round.finishOrder,
+  { duration: 38 });
+settleCam(an2, 34, 38.0);
+an2._freeze = 0.5;
+an2._flash = 0.3;
+an2.drawFrame(38.02);
+
+var an3 = new RaceAnimator(document.getElementById('c3'), round.horses, round.finishOrder,
+  { duration: 38, infieldText: '第 1 場', infieldSub: '派彩率 100%' });
+settleCam(an3, 4, 7.8); // 領先群正在第一個彎道
+
+if (only) {
+  var keep = { idle: 'c0', mid: 'c1', finish: 'c2', turn: 'c3' }[only];
+  document.querySelectorAll('canvas,div').forEach(function (el) {
+    if (el.id !== keep) el.style.display = 'none';
+  });
+}
+</script>
+</body></html>

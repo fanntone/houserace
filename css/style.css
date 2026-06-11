@@ -1,0 +1,429 @@
+/* style.css — 深色機台風格 */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
+  background: #11151c;
+  color: #e9ecef;
+  font-size: 14px;
+}
+.hidden { display: none !important; }
+code {
+  font-family: Consolas, monospace;
+  color: #ffd43b;
+  word-break: break-all;
+  font-size: 12px;
+}
+button {
+  font-family: inherit;
+  background: #2a3240;
+  color: #e9ecef;
+  border: 1px solid #3b4452;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover { background: #353f50; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary {
+  background: #f5c518;
+  color: #1a1a1a;
+  font-weight: bold;
+  border-color: #f5c518;
+}
+button.primary:hover { background: #ffd43b; }
+button.small { font-size: 11px; padding: 2px 8px; }
+select {
+  font-family: inherit;
+  background: #2a3240;
+  color: #e9ecef;
+  border: 1px solid #3b4452;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+/* ---------- 頂欄 ---------- */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #181e28;
+  border-bottom: 2px solid #f5c51833;
+}
+.brand { font-size: 19px; font-weight: bold; color: #f5c518; }
+.spacer { flex: 1; }
+.pill {
+  background: #2a3240;
+  border-radius: 99px;
+  padding: 4px 14px;
+  font-size: 13px;
+}
+.pill.phase.betting { background: #2b8a3e; color: #fff; }
+.pill.phase.racing { background: #e8590c; color: #fff; }
+.pill.phase.result { background: #1971c2; color: #fff; }
+.balance { font-size: 17px; font-weight: bold; color: #ffd43b; }
+.icon-btn {
+  font-size: 16px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  padding: 0;
+}
+.help-btn {
+  background: #f5c518;
+  color: #1a1a1a;
+  font-weight: bold;
+  border-color: #f5c518;
+}
+.help-btn:hover { background: #ffd43b; }
+
+/* ---------- 主版面 ---------- */
+main {
+  display: grid;
+  grid-template-columns: 430px 1fr;
+  gap: 14px;
+  padding: 14px;
+  align-items: start;
+}
+#left {
+  background: #181e28;
+  border-radius: 10px;
+  padding: 12px;
+}
+#left.locked #oddsArea,
+#left.locked #betTabs {
+  pointer-events: none;
+  opacity: 0.55;
+}
+#right { min-width: 0; }
+
+/* ---------- 分頁 ---------- */
+.tabs { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.tab {
+  flex: 1;
+  min-width: 70px;
+  border-radius: 8px 8px 0 0;
+  border-bottom: 2px solid transparent;
+}
+.tab.active {
+  background: #f5c518;
+  color: #1a1a1a;
+  font-weight: bold;
+  border-color: #f5c518;
+}
+.type-hint { font-size: 12px; color: #9aa3b2; margin: 2px 0 8px; }
+
+/* ---------- 賠率表 ---------- */
+.odds-table { width: 100%; border-collapse: collapse; }
+.odds-table th {
+  font-size: 12px;
+  color: #9aa3b2;
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2a3240;
+}
+.odds-table td { padding: 7px 8px; border-bottom: 1px solid #222936; }
+.odds-table tr.pickable { cursor: pointer; }
+.odds-table tr.pickable:hover { background: #222b3a; }
+.odds-table tr.selected { background: #f5c5181f; outline: 2px solid #f5c518; }
+.odds-table .hname { font-weight: bold; }
+.odds-table .prob { color: #9aa3b2; font-size: 13px; }
+.odds-table .odds { color: #ffd43b; font-weight: bold; text-align: right; }
+
+/* ---------- 賠率矩陣 ---------- */
+.odds-matrix { display: grid; gap: 3px; }
+.mx-corner, .mx-head {
+  font-size: 11px;
+  color: #9aa3b2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 0;
+}
+.mx-cell {
+  background: #222b3a;
+  border-radius: 4px;
+  text-align: center;
+  padding: 7px 0;
+  font-size: 11.5px;
+  color: #ffd43b;
+  cursor: pointer;
+}
+.mx-cell:hover { background: #2e3a4e; }
+.mx-cell.selected { background: #f5c518; color: #1a1a1a; font-weight: bold; }
+.mx-blank { background: transparent; }
+
+/* ---------- 注單票 ---------- */
+.ticket {
+  margin-top: 10px;
+  background: #20283577;
+  border: 1px solid #f5c51855;
+  border-radius: 8px;
+  padding: 10px;
+}
+.ticket-sel { font-size: 15px; font-weight: bold; margin-bottom: 8px; }
+.ticket-odds { color: #ffd43b; margin-left: 8px; }
+.chips { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.chip { border-radius: 99px; min-width: 56px; font-weight: bold; }
+.chip.clear { color: #ff8787; }
+.ticket-foot { display: flex; align-items: center; gap: 14px; }
+.ticket-foot b { color: #ffd43b; }
+.ticket-foot button { margin-left: auto; }
+
+/* ---------- 已下注列表 ---------- */
+.betlist-title { margin-top: 12px; font-size: 12px; color: #9aa3b2; }
+.bet-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #1d2430;
+  border-radius: 6px;
+  margin-top: 5px;
+  font-size: 13px;
+}
+.bet-desc { font-weight: bold; }
+.bet-odds { color: #ffd43b; }
+.bet-amt { margin-left: auto; }
+.bet-pot { color: #9aa3b2; font-size: 12px; }
+.bet-del {
+  padding: 0 7px;
+  font-size: 12px;
+  color: #ff8787;
+  background: transparent;
+  border: none;
+}
+.betlist-total {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #9aa3b2;
+  text-align: right;
+}
+.broke {
+  margin-top: 10px;
+  background: #c92a2a;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: bold;
+}
+
+/* ---------- 跑道區 ---------- */
+#trackWrap { position: relative; }
+#track {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px #f5c51822;
+}
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+#countdownOverlay {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13, 17, 23, 0.85);
+  border: 1px solid #f5c51866;
+  border-radius: 10px;
+  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.cd-text b { color: #ffd43b; font-size: 20px; }
+#speedCtrl {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  background: rgba(13, 17, 23, 0.8);
+  border-radius: 8px;
+  padding: 6px;
+}
+#speedCtrl .spd.active {
+  background: #f5c518;
+  color: #1a1a1a;
+  font-weight: bold;
+}
+
+/* ---------- 旁述與名次板 ---------- */
+#liveBar {
+  margin-top: 10px;
+  background: #181e28;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.live-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#commentary {
+  flex: 1;
+  font-size: 15px;
+  font-weight: bold;
+  color: #ffd43b;
+  padding: 4px 6px;
+  border-radius: 6px;
+  min-height: 24px;
+}
+.voice-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+  background: #2a3240;
+  border-color: #3b4452;
+}
+#commentary.flash { animation: flash 1.2s ease-out; }
+@keyframes flash {
+  from { background: rgba(245, 197, 24, 0.3); }
+  to { background: transparent; }
+}
+#rankBoard {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+  gap: 5px;
+}
+#rankBoard li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1d2430;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.rb-pos { min-width: 34px; color: #9aa3b2; font-size: 12px; }
+.rb-name { font-weight: bold; }
+.rb-odds { margin-left: auto; color: #ffd43b; font-size: 12px; }
+
+/* ---------- 號碼布 ---------- */
+.numchip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: bold;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  flex: none;
+}
+
+/* ---------- 公平驗證列 ---------- */
+#fairBar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 16px 14px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+.fair-label { color: #74c0fc; font-weight: bold; }
+
+/* ---------- Modal ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-box {
+  background: #1b212b;
+  border: 1px solid #3b4452;
+  border-radius: 12px;
+  padding: 20px 24px;
+  width: min(560px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+.modal-box.wide { width: min(740px, 94vw); }
+.modal-box h2 { margin: 0 0 14px; color: #f5c518; font-size: 19px; }
+.modal-actions { margin-top: 16px; text-align: right; display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ---------- 結果面板 ---------- */
+.podium-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  padding: 5px 0;
+}
+.podium-medal { font-size: 20px; }
+.podium-name { font-weight: bold; }
+.result-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+.result-table th {
+  font-size: 12px;
+  color: #9aa3b2;
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2a3240;
+}
+.result-table td { padding: 6px 8px; border-bottom: 1px solid #222936; font-size: 13px; }
+.result-table tr.won td { color: #69db7c; font-weight: bold; }
+.result-table tr.lost td { color: #8d96a5; }
+.totals-line { margin-top: 12px; font-size: 14px; }
+.net-pos { color: #69db7c; font-weight: bold; }
+.net-neg { color: #ff8787; font-weight: bold; }
+.no-bets { margin-top: 12px; color: #9aa3b2; }
+.fair-line { margin-top: 14px; font-size: 12px; color: #9aa3b2; }
+
+/* ---------- 驗證面板 ---------- */
+.vf-row { margin: 7px 0; font-size: 13px; }
+.vf-label { color: #9aa3b2; display: inline-block; min-width: 160px; }
+.vf-ok { color: #69db7c; font-weight: bold; }
+.vf-bad { color: #ff8787; font-weight: bold; }
+.vf-conclusion {
+  margin-top: 14px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #20283577;
+  font-size: 14px;
+}
+.vf-note { font-size: 12px; color: #9aa3b2; }
+
+/* ---------- 設定 ---------- */
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+.setting-row label { min-width: 160px; color: #c2c9d4; }
+
+/* ---------- 說明 ---------- */
+.help-page { line-height: 1.7; }
+.help-page h3 { color: #ffd43b; font-size: 15px; margin: 14px 0 6px; }
+.help-page p, .help-page li { font-size: 13.5px; color: #d4dae3; }
+.help-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.help-table th, .help-table td {
+  border: 1px solid #2a3240;
+  padding: 7px 10px;
+  font-size: 13px;
+  text-align: left;
+}
+.help-table th { color: #9aa3b2; background: #1d2430; }
+
+/* ---------- 窄螢幕 ---------- */
+@media (max-width: 1100px) {
+  main { grid-template-columns: 1fr; }
+}

@@ -390,6 +390,23 @@
     });
   }
 
+  // ---------- 響應式賽事畫布 ----------
+  // 手機直版時改用近正方形比例，賽事畫面占滿螢幕寬（桌面維持寬螢幕轉播比例）
+  function fitTrackCanvas() {
+    var cv = $('track'), ov = $('overlay');
+    var portrait = window.innerWidth < window.innerHeight;
+    var W = 920;
+    var H = portrait ? 860 : 440;
+    if (cv.width !== W || cv.height !== H) {
+      cv.width = W;
+      cv.height = H;
+      if (ov) { ov.width = W; ov.height = H; }
+      if (Game.animator && Game.animator.resize) Game.animator.resize();
+    }
+  }
+  window.addEventListener('resize', fitTrackCanvas);
+  window.addEventListener('orientationchange', fitTrackCanvas);
+
   // ---------- 多分頁防護 ----------
   // storage 事件只會由「其他分頁」的寫入觸發：偵測到即凍結本分頁，
   // 避免兩個分頁互相覆寫注單與餘額（單機網頁多人「同時玩」唯一的衝突來源）。
@@ -411,6 +428,7 @@
   });
 
   // ---------- 啟動 ----------
+  fitTrackCanvas(); // 先依裝置方向定好畫布比例，再建場次
   bindEvents();
   var voiceOn = store.get('voice', true);
   Voice.setEnabled(voiceOn);

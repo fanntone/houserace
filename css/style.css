@@ -425,7 +425,36 @@ main {
 }
 .help-table th { color: #9aa3b2; background: #1d2430; }
 
-/* ---------- 窄螢幕 ---------- */
+/* ---------- 窄螢幕：賽事畫面優先 ---------- */
 @media (max-width: 1100px) {
-  main { grid-template-columns: 1fr; }
+  main { display: flex; flex-direction: column; }
+  #right { order: -1; } /* 跑道排最上面 */
+}
+
+/* ---------- 手機直版：緊湊化 ---------- */
+@media (max-width: 760px) {
+  main { padding: 8px; gap: 10px; }
+  #left { padding: 10px; }
+  #topbar { padding: 8px 10px; gap: 8px; flex-wrap: wrap; }
+  .brand { font-size: 16px; }
+  .balance { font-size: 15px; }
+  .pill { padding: 3px 10px; font-size: 12px; }
+  .icon-btn { width: 34px; height: 34px; font-size: 14px; }
+  #commentary { font-size: 13.5px; }
+  #rankBoard { grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 4px; }
+  #rankBoard li { font-size: 12px; padding: 4px 6px; }
+  #countdownOverlay { padding: 6px 10px; gap: 8px; top: 8px; }
+  .cd-text { font-size: 13px; }
+  .cd-text b { font-size: 17px; }
+  #speedCtrl { bottom: 8px; right: 8px; padding: 4px; gap: 4px; }
+  #speedCtrl button { padding: 5px 8px; font-size: 12px; }
+  .modal-box { width: 96vw; padding: 14px 16px; }
+  .modal-box.wide { width: 96vw; }
+  #fairBar { font-size: 10px; gap: 8px; padding: 6px 10px 12px; }
+  .odds-table td { padding: 6px 6px; }
+  .tab { min-width: 60px; padding: 6px 8px; }
+  .chips { gap: 4px; }
+  .chip { min-width: 48px; padding: 6px 8px; }
+  .setting-row label { min-width: 110px; font-size: 13px; }
+  .setting-hint { margin-left: 0; }
 }

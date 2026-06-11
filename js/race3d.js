@@ -358,6 +358,20 @@
     if (this._postRaf) cancelAnimationFrame(this._postRaf);
   };
 
+  // 響應式：畫布尺寸改變（手機直版用近正方形比例）時重設渲染器與鏡頭
+  RaceAnimator3D.prototype.resize = function () {
+    var w = this.canvas.width, h = this.canvas.height;
+    this.renderer.setSize(w, h, false);
+    this.camera.aspect = w / h;
+    this.camera.fov = (this.camera.aspect < 1.2) ? 56 : 42; // 窄畫面加寬視野，馬群不出框
+    this.camera.updateProjectionMatrix();
+    if (shared.overlay) {
+      shared.overlay.width = w;
+      shared.overlay.height = h;
+    }
+    if (!this.running && !this._post) this.drawFrame(this.raceTime || 0);
+  };
+
   RaceAnimator3D.prototype._setupGeometry = function () {
     // 世界座標：公尺。x 沿主直道，z 朝看台側，y 向上。
     this.cx = 0;

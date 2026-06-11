@@ -926,6 +926,12 @@
 
   RaceAnimator.prototype.setSpeed = function (x) { this.speed = x; };
 
+  // 響應式：畫布尺寸改變時重算 2D 幾何
+  RaceAnimator.prototype.resize = function () {
+    this._setupGeometry();
+    if (!this.running) this.drawFrame(this.raceTime || 0);
+  };
+
   RaceAnimator.prototype.stop = function () {
     this.running = false;
     if (this._raf) cancelAnimationFrame(this._raf);

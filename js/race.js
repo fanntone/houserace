@@ -80,12 +80,21 @@
     this.T = T;
     this.endTime = t + 1.4; // 末馬衝線後再跑一小段收尾
 
-    // 擺動參數（純演出用，與賽果無關）：總導數上限 < 1，保證單調
-    this.wobble = [];
+    // 配速模型（純演出、與賽果無關）：距離差模型 + 跑法風格 + 內側省地利
+    //   進度 p_i(t) = s − g_i(s)，s = t/T0（以頭馬完賽時間正規化）
+    //   g_i = 集團內深度：中段維持小深度（緊咬膠著、依跑法此消彼長），
+    //         末段 28% 平滑混合到精確最終差距 G_i = (T_i−T0)/T0 ⇒ p_i(T_i) = 1 精確
+    this.T0 = this.T[this.finishOrder[0]];
+    this.pace = [];
     for (var i = 0; i < n; i++) {
-      this.wobble.push({
-        a1: 0.008 + Math.random() * 0.010, f1: 0.7 + Math.random() * 0.9, p1: Math.random() * Math.PI * 2,
-        a2: 0.004 + Math.random() * 0.006, f2: 2.0 + Math.random() * 2.0, p2: Math.random() * Math.PI * 2
+      var style = Math.random();                       // 跑法：0 逃馬（貼前）→ 1 後追
+      var gateInner = (n - 1 - i) / Math.max(1, n - 1); // 閘位：1 號最內 = 1
+      this.pace.push({
+        base: Math.max(0.0005, 0.002 + style * 0.010 - gateInner * 0.003), // 中段深度（內側省地利）
+        amp: 0.0012 + Math.random() * 0.0024,           // 集團內小幅消長（無突兀加速）
+        f: 0.5 + Math.random() * 0.7,
+        ph: Math.random() * Math.PI * 2,
+        G: (this.T[i] - this.T0) / this.T0              // 最終差距（保證精準壓線）
       });
     }
     this.photoFinish = (T[this.finishOrder[1]] - T[this.finishOrder[0]]) < 0.06;
@@ -109,7 +118,11 @@
     this._lastAnnT = -9;
   };
 
+  function smoothstep01(x) { return x * x * (3 - 2 * x); }
+
   // 進度（0 → 1 衝線；衝線後減速續跑，軟漸近 1.12 且嚴格保序，不會繞回）
+  // 中段：馬群緊咬（深度 ≤ 約1.4% 賽程 ≈ 數個馬身），依跑法風格小幅消長；
+  // 末段 28%：深度平滑混合到最終差距 ⇒ 後追馬掃過、力竭馬被吞，且壓線時刻精確。
   RaceAnimator.prototype.progressOf = function (i, time) {
     var Ti = this.T[i];
     if (time <= 0) return 0;
@@ -117,11 +130,14 @@
       var over = ((time - Ti) / Ti) * 0.85;
       return 1 + 0.12 * (1 - Math.exp(-over / 0.12));
     }
-    var u = time / Ti;
-    var w = this.wobble[i];
-    var env = Math.sin(Math.PI * u);
-    return u + env * (w.a1 * Math.sin(2 * Math.PI * w.f1 * u + w.p1) +
-                      w.a2 * Math.sin(2 * Math.PI * w.f2 * u + w.p2));
+    var s = time / this.T0;
+    var pc = this.pace[i];
+    var ramp = Math.min(1, s / 0.12); // 出閘成形期：從並列逐漸排出隊形
+    var b = ramp * (pc.base + pc.amp * Math.sin(2 * Math.PI * pc.f * s + pc.ph));
+    if (b < 0) b = 0;
+    var w = (s <= 0.72) ? 0 : (s >= 1 ? 1 : smoothstep01((s - 0.72) / 0.28));
+    var p = s - (b * (1 - w) + pc.G * w);
+    return p > 0 ? p : 0;
   };
 
   // 沿賽道的累積距離（世界 px）

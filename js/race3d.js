@@ -47,9 +47,21 @@
         var box = new THREE.Box3().setFromObject(mesh);
         var size = box.getSize(new THREE.Vector3());
         assets.normScale = 2.45 / size.y; // 正規化成總高約 2.45m
-        // 模型長軸為 Z（面向 +Z），寬度取 X，供號碼布貼合側腹
-        assets.halfWidth = Math.min(0.5, (size.x * assets.normScale) / 2 + 0.04);
-        assets.backHeight = size.y * assets.normScale * 0.62; // 約馬背高度
+        // 精確量測「馬身中段」：包圍盒含抬頭與伸展的四肢會嚴重高估，
+        // 只取長軸中段 ±12% 的頂點，求真實的背高與軀幹半寬
+        var pos = mesh.geometry.attributes.position;
+        var zc = (box.min.z + box.max.z) / 2;
+        var zr = (box.max.z - box.min.z);
+        var maxY = -Infinity, maxX = 0;
+        for (var vi = 0; vi < pos.count; vi++) {
+          if (Math.abs(pos.getZ(vi) - zc) < zr * 0.12) {
+            if (pos.getY(vi) > maxY) maxY = pos.getY(vi);
+            var ax = Math.abs(pos.getX(vi));
+            if (ax > maxX) maxX = ax;
+          }
+        }
+        assets.backHeight = (maxY - box.min.y) * assets.normScale; // 真實馬背高
+        assets.halfWidth = maxX * assets.normScale + 0.01;         // 真實軀幹半寬
         assets.clipDur = gltf.animations[0].duration || 1;
         assets.gltf = gltf;
         assets.pending.forEach(function (cb) { cb(); });
@@ -436,6 +448,11 @@
     this._mixers = [];
     this._actions = [];
     this._prevDist = [];
+    // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號最內
+    this._lat = [];
+    for (var li = 0; li < this.horses.length; li++) {
+      this._lat[li] = this.horses.length - 1 - li;
+    }
 
     // 大螢幕文字
     var sc = shared.screenCtx;
@@ -507,14 +524,15 @@
       c.translate(u * 512, 128);
       c.rotate(rot);
       c.fillStyle = horse.color.fg;
-      c.font = 'bold 120px Arial';
+      c.font = 'bold 150px Arial';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
       c.fillText(String(horse.num), 0, 8);
       c.restore();
     }
-    stamp(0.25, Math.PI / 2);   // 一側
-    stamp(0.75, -Math.PI / 2);  // 另一側
+    // 側腹位置：θ(u)=0.35π+u·1.3π，右側 θ=π/2 → u≈0.115、左側 θ=1.5π → u≈0.885
+    stamp(0.115, Math.PI / 2);
+    stamp(0.885, -Math.PI / 2);
     var t = new THREE.CanvasTexture(cv);
     t.encoding = THREE.sRGBEncoding;
     return t;
@@ -617,18 +635,19 @@
       var hw = assets.halfWidth || 0.34;
       var backH = assets.backHeight || 1.5;
       // θ 以馬背為中心包約 235°，開口朝腹部下方；下襬微張營造垂墜
-      var clothGeo = new THREE.CylinderGeometry(hw + 0.04, hw + 0.07, 0.72, 28, 1, true,
+      var clothGeo = new THREE.CylinderGeometry(hw + 0.015, hw + 0.05, 0.72, 28, 1, true,
         Math.PI * 0.35, Math.PI * 1.3);
       clothGeo.rotateX(Math.PI / 2); // 圓筒軸轉為沿馬身方向
       var cloth = new THREE.Mesh(clothGeo, new THREE.MeshLambertMaterial({ map: ct }));
-      cloth.position.set(0, backH - hw * 0.8, -0.05);
+      cloth.position.set(0, backH - hw, -0.05); // 布頂貼齊馬背（軀幹視為半徑 hw 的圓筒）
       cloth.castShadow = true;
       g.add(cloth);
 
-      // 騎師：關節人形（競賽蹲姿），掛在馬背基準點，整組做騎乘律動
+      // 騎師：關節人形（競賽蹲姿），臀部坐上馬背，雙腿跨在兩側
       var built = buildJockey(horse.color.bg, hw);
       var jk = built.group;
-      jk.position.set(0, backH, 0.08); // 略前坐於鞍上
+      jk.position.set(0, backH - 0.08, 0.08);
+      g.userData.jkBaseY = backH - 0.08;
       g.add(jk);
       g.userData.jockey = jk;
       g.userData.whipArm = built.whipArm;
@@ -669,7 +688,8 @@
       // 集團質心（前 4 名）
       var cxp = 0, czp = 0, m = Math.min(4, n);
       for (var j = 0; j < m; j++) {
-        var pj = this.lanePoint(ranking[j], this.progressOf(ranking[j], time));
+        var lj = this._lat ? this._lat[ranking[j]] : ranking[j];
+        var pj = this.lanePoint(lj, this.progressOf(ranking[j], time));
         cxp += pj.x / m; czp += pj.y / m;
       }
       var leadD = this.distOf(ranking[0], time);
@@ -677,7 +697,7 @@
       if (time > T3 + 0.6) {
         shot = 'winner'; // 賽後：鏡頭緩慢環繞減速中的冠軍馬（勝利者畫面）
         var w = this.finishOrder[0];
-        var pw = this.lanePoint(w, this.progressOf(w, time));
+        var pw = this.lanePoint(this._lat ? this._lat[w] : w, this.progressOf(w, time));
         var ang = time * 0.22;
         posT.set(pw.x + Math.cos(ang) * 10, 3.4, pw.y + Math.sin(ang) * 10);
         lookT.set(pw.x, 1.5, pw.y);
@@ -708,17 +728,68 @@
     this.camera.lookAt(cs.look);
   };
 
+  // ---------- 走位系統：出閘向內欄收攏、疊位往外錯開、末段超車外抽 ----------
+  RaceAnimator3D.prototype._updateLats = function (time, dt) {
+    var n = this.horses.length;
+    var rail = n - 1; // 最內側
+    if (time <= 0) { // 閘內：固定閘位（1 號最內）
+      for (var iz = 0; iz < n; iz++) this._lat[iz] = n - 1 - iz;
+      return;
+    }
+    var s = time / (this.T0 || this.T[this.finishOrder[0]]);
+    var ranking = this.rankingAt(time);
+    var taken = [];
+    var target = [];
+    for (var ri = 0; ri < n; ri++) {
+      var i = ranking[ri];
+      var prog = this.progressOf(i, time);
+      var lat = rail; // 人人都想貼欄（省距離）
+      var guard = 0, moved = true;
+      while (moved && guard++ <= n + 2) { // 前方 4.5m 內已有馬佔位 → 往外錯開疊位
+        moved = false;
+        for (var tj = 0; tj < taken.length; tj++) {
+          if (Math.abs(taken[tj].prog - prog) * this.P0 < 4.5 &&
+              Math.abs(taken[tj].lat - lat) < 0.85) {
+            lat = taken[tj].lat - 0.9;
+            moved = true;
+            break;
+          }
+        }
+      }
+      if (lat < -0.6) lat = -0.6;
+      taken.push({ prog: prog, lat: lat });
+      target[i] = lat;
+    }
+    // 末段：最終前三名若仍被困在後面，往外抽出展開超車（差し/追込走位）
+    if (s > 0.72 && s < 1.02) {
+      for (var f = 0; f < Math.min(3, n); f++) {
+        var hf = this.finishOrder[f];
+        if (ranking.indexOf(hf) > 2) {
+          target[hf] = Math.min(target[hf], rail - 2.4);
+        }
+      }
+    }
+    // 出閘成形期（前 2%~16% 賽程）：從閘位平滑帶入隊形；之後緩速跟隨目標
+    var form = Math.min(1, Math.max(0, (s - 0.02) / 0.14));
+    var k = 1 - Math.exp(-dt * 1.1);
+    for (var m = 0; m < n; m++) {
+      var tgt = (n - 1 - m) * (1 - form) + target[m] * form;
+      this._lat[m] += (tgt - this._lat[m]) * k;
+    }
+  };
+
   // ---------- 主繪製 ----------
   RaceAnimator3D.prototype.drawFrame = function (time) {
     var dt = Math.max(0, time - (this._lastT === undefined ? time : this._lastT));
     this._lastT = time;
     var moving = time > 0;
 
+    this._updateLats(time, dt);
     for (var k = 0; k < this._horses3d.length; k++) {
       var g = this._horses3d[k];
       var prog = this.progressOf(k, time);
-      var p = this.lanePoint(k, prog);
-      var a = this.lanePoint(k, prog + 0.0015);
+      var p = this.lanePoint(this._lat[k], prog);
+      var a = this.lanePoint(this._lat[k], prog + 0.0015);
       g.position.set(p.x, 0, p.y);
       g.lookAt(a.x, 0, a.y);
 
@@ -738,8 +809,8 @@
         var act = this._actions[k];
         var cyc = act ? (act.time / assets.clipDur) * Math.PI * 2 : 0;
         var amp = moving ? 1 : 0.15;
-        var baseY = (assets.backHeight || 1.5);
-        ud.jockey.position.y = baseY + Math.sin(cyc) * 0.07 * amp;
+        var baseY = ud.jkBaseY || (assets.backHeight || 1.5) - 0.08;
+        ud.jockey.position.y = baseY + Math.sin(cyc) * 0.05 * amp;
         ud.jockey.position.z = 0.05 * Math.sin(cyc + 0.6) * amp;
         ud.jockey.rotation.x = 0.08 * Math.sin(cyc + 1.1) * amp;
         if (moving && prog > 0.55 && prog < 1 && ud.whipT <= 0 && Math.random() < dt * 0.5) {
@@ -785,7 +856,7 @@
     ctx.fillStyle = '#f1f3f5';
     ctx.fillRect(this.finishX - 2, this.innerR, 4, this.outerR - this.innerR);
     for (var i = 0; i < this.horses.length; i++) {
-      var pt = this.lanePoint(i, this.progressOf(i, time));
+      var pt = this.lanePoint(this._lat ? this._lat[i] : i, this.progressOf(i, time));
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 3.4 / s * 0.5 + 2.4, 0, Math.PI * 2);
       ctx.fillStyle = this.horses[i].color.bg;

@@ -407,6 +407,11 @@
   };
 
   // 沿賽道距離取點 + 切線/外法線（供攝影機機位）
+  // 閘位側位：真實規則——1 號閘貼著內欄，按出賽數向外排開
+  RaceAnimator3D.prototype.gateLat = function (i) {
+    return this.maxLat - 0.4 - i;
+  };
+
   RaceAnimator3D.prototype.pathPt = function (dist, lat) {
     var frac = dist / this.P0;
     var a = this.lanePoint(0, frac);
@@ -699,10 +704,10 @@
     this._prevDist = [];
     this._lastDigit = null; // 出閘倒數顯示/嗶聲
     this._goBeeped = false;
-    // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號最內
+    // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號閘貼內欄向外排
     this._lat = [];
     for (var li = 0; li < this.horses.length; li++) {
-      this._lat[li] = this.horses.length - 1 - li;
+      this._lat[li] = this.gateLat(li);
     }
 
     // 大螢幕文字
@@ -746,17 +751,16 @@
     var gh = (this._racerType === 'cat') ? 1.1 : 2.05;
     g.userData.doors = [];
     for (var k = 0; k <= n; k++) {
-      // 各道隔板：短板擋在身後半，頭部探出閘門前緣
+      // 各道隔板：短板擋在身後半，頭部探出閘門前緣（沿閘位排，1 號閘貼內欄）
       var wall = new THREE.Mesh(new THREE.BoxGeometry(1.8, gh, 0.1), mat);
-      var p = this.lanePoint(Math.min(k, n - 1), 0);
-      var off = (k === n) ? -this.laneGap : 0;
-      wall.position.set(p.x - 0.9, gh / 2, p.y + off + this.laneGap / 2);
+      var p = this.lanePoint(this.gateLat(0) + 0.5 - k, 0);
+      wall.position.set(p.x - 0.9, gh / 2, p.y);
       wall.castShadow = true;
       g.add(wall);
       // 各道前欄門（頂部鉸鏈，出閘瞬間向上彈開）
       if (k < n) {
         var pivot = new THREE.Group();
-        var pd = this.lanePoint(k, 0);
+        var pd = this.lanePoint(this.gateLat(k), 0);
         pivot.position.set(pd.x + 1.15, gh - 0.08, pd.y);
         var bar = new THREE.Mesh(
           new THREE.BoxGeometry(0.08, gh * 0.86, this.laneGap * 0.82), doorMat);
@@ -767,7 +771,7 @@
       }
     }
     var top = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, n * this.laneGap + 1), mat);
-    var pm = this.lanePoint((this.horses.length - 1) / 2, 0);
+    var pm = this.lanePoint(this.gateLat((n - 1) / 2), 0);
     top.position.set(pm.x - 0.9, gh + 0.32, pm.y);
     g.add(top);
     return g;
@@ -1043,8 +1047,8 @@
     if (time <= 0) {
       shot = 'gate';
       var low = this._racerType === 'cat'; // 貓視角放低，貼著小傢伙們的臉
-      var gp = this.pathPt(11, -28);               // 內場斜前方看閘門（轉播機位）
-      var gl = this.lanePoint((n - 1) / 2, 0);
+      var gp = this.pathPt(11, -22);               // 內場斜前方看閘門（轉播機位）
+      var gl = this.lanePoint(this.gateLat((n - 1) / 2), 0); // 閘箱群中心
       posT.set(gp.x, low ? 1.7 : 2.7, gp.z);
       lookT.set(gl.x + 1.2, low ? 0.8 : 1.4, gl.y);
     } else {
@@ -1101,8 +1105,8 @@
   RaceAnimator3D.prototype._updateLats = function (time, dt) {
     var n = this.horses.length;
     var rail = this.maxLat; // 物理內欄（貼真欄杆，不是最內閘道）——搶賽道的目標
-    if (time <= 0) { // 閘內：固定閘位（1 號最內）
-      for (var iz = 0; iz < n; iz++) this._lat[iz] = n - 1 - iz;
+    if (time <= 0) { // 閘內：固定閘位（1 號閘最貼內欄）
+      for (var iz = 0; iz < n; iz++) this._lat[iz] = this.gateLat(iz);
       this._slot = null;
       return;
     }
@@ -1111,7 +1115,7 @@
       this._nextEval = [];
       this._swing = {};
       for (var i0 = 0; i0 < n; i0++) {
-        this._slot[i0] = n - 1 - i0;
+        this._slot[i0] = this.gateLat(i0);
         this._nextEval[i0] = 0.4 + Math.random() * 0.5; // 決策時點錯開
       }
     }
@@ -1155,7 +1159,7 @@
     var form = Math.min(1, Math.max(0, (s - 0.02) / 0.14));
     var rate = (s < 0.22 ? 1.5 : (s > 0.7 ? 1.2 : 0.6)) * dt;
     for (var m = 0; m < n; m++) {
-      var tgt = (n - 1 - m) * (1 - form) + this._slot[m] * form;
+      var tgt = this.gateLat(m) * (1 - form) + this._slot[m] * form;
       var dlt = tgt - this._lat[m];
       if (dlt > rate) dlt = rate;
       else if (dlt < -rate) dlt = -rate;

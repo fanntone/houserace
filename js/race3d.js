@@ -43,25 +43,51 @@
       for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
       new THREE.GLTFLoader().parse(buf, '', function (gltf) {
         var mesh = gltf.scene.children[0];
-        smoothNormals(mesh.geometry);
-        var box = new THREE.Box3().setFromObject(mesh);
-        var size = box.getSize(new THREE.Vector3());
-        assets.normScale = 2.45 / size.y; // 正規化成總高約 2.45m
-        // 精確量測「馬身中段」：包圍盒含抬頭與伸展的四肢會嚴重高估，
-        // 只取長軸中段 ±12% 的頂點，求真實的背高與軀幹半寬
-        var pos = mesh.geometry.attributes.position;
-        var zc = (box.min.z + box.max.z) / 2;
-        var zr = (box.max.z - box.min.z);
-        var maxY = -Infinity, maxX = 0;
+        var geo = mesh.geometry;
+        smoothNormals(geo);
+        // 注意：computeBoundingBox/setFromObject 會把所有 morph 影格的位移灌進
+        // 包圍盒（高度/深度/貼地全被汙染——這正是騎師浮空的根因）。
+        // 一律自己掃「基準幾何」頂點求乾淨邊界。
+        var pos = geo.attributes.position;
+        var minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
         for (var vi = 0; vi < pos.count; vi++) {
-          if (Math.abs(pos.getZ(vi) - zc) < zr * 0.12) {
-            if (pos.getY(vi) > maxY) maxY = pos.getY(vi);
-            var ax = Math.abs(pos.getX(vi));
+          var y = pos.getY(vi), z = pos.getZ(vi);
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          if (z < minZ) minZ = z;
+          if (z > maxZ) maxZ = z;
+        }
+        assets.normScale = 2.45 / (maxY - minY);          // 以基準姿勢身高正規化
+        assets.yOffset = -minY * assets.normScale;        // 腳底貼地
+        // 中段窗口（基準 z 範圍 ±12%）：量軀幹半寬與背高
+        var zc = (minZ + maxZ) / 2, zr = maxZ - minZ;
+        var mid = [], maxX = 0;
+        for (var vj = 0; vj < pos.count; vj++) {
+          if (Math.abs(pos.getZ(vj) - zc) < zr * 0.12) {
+            mid.push(vj);
+            var ax = Math.abs(pos.getX(vj));
             if (ax > maxX) maxX = ax;
           }
         }
-        assets.backHeight = (maxY - box.min.y) * assets.normScale; // 真實馬背高
-        assets.halfWidth = maxX * assets.normScale + 0.01;         // 真實軀幹半寬
+        // 背高取「基準 + 全部 morph 影格」平均：奔跑中身體比基準姿勢低伏
+        var morphs = (geo.morphAttributes && geo.morphAttributes.position) || [];
+        var relative = geo.morphTargetsRelative !== false;
+        function midMaxY(mt) {
+          var m = -Infinity;
+          for (var k = 0; k < mid.length; k++) {
+            var yv = pos.getY(mid[k]);
+            if (mt) yv = relative ? yv + mt.getY(mid[k]) : mt.getY(mid[k]);
+            if (yv > m) m = yv;
+          }
+          return m;
+        }
+        var sum = midMaxY(null), cnt = 1;
+        for (var mi = 0; mi < morphs.length; mi++) {
+          sum += midMaxY(morphs[mi]);
+          cnt++;
+        }
+        assets.backHeight = (sum / cnt - minY) * assets.normScale; // 奔跑平均背高
+        assets.halfWidth = maxX * assets.normScale + 0.01;         // 軀幹半寬
         assets.clipDur = gltf.animations[0].duration || 1;
         assets.gltf = gltf;
         assets.pending.forEach(function (cb) { cb(); });
@@ -624,6 +650,7 @@
       mesh.material.color = new THREE.Color(horse.coat ? horse.coat.body : '#8a5a33');
       mesh.castShadow = true;
       mesh.scale.setScalar(assets.normScale);
+      mesh.position.y = assets.yOffset || 0; // 腳底貼地
       var inner = new THREE.Group(); // 模型朝向校正層
       inner.add(mesh);
       inner.rotation.y = yaw;
@@ -646,6 +673,7 @@
       // 騎師：關節人形（競賽蹲姿），臀部坐上馬背，雙腿跨在兩側
       var built = buildJockey(horse.color.bg, hw);
       var jk = built.group;
+      jk.scale.setScalar(1.35); // 與 2.45m 馬身等比
       jk.position.set(0, backH - 0.08, 0.08);
       g.userData.jkBaseY = backH - 0.08;
       g.add(jk);
@@ -922,4 +950,5 @@
   }
 
   global.RaceAnimator3D = RaceAnimator3D;
+  RaceAnimator3D._assets = assets; // 供除錯/預覽頁檢視量測值
 })(typeof window !== 'undefined' ? window : this);

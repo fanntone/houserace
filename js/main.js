@@ -27,7 +27,8 @@
     settings: {
       rtp: store.get('rtp', 1),
       horses: store.get('horses', 8),
-      duration: store.get('duration', 38)
+      duration: store.get('duration', 38),
+      racer: store.get('racer', 'horse')
     },
     round: null,
     lastRound: null,
@@ -129,6 +130,7 @@
     if (Game.animator) Game.animator.stop();
     var animOpts = {
       duration: Game.settings.duration,
+      racerType: Game.settings.racer,
       infieldText: '第 ' + round.no + ' 場',
       infieldSub: '派彩率 ' + Math.round(round.rtp * 100) + '%　' + round.horses.length + ' 匹出賽',
       onCommentary: function (text) {
@@ -330,6 +332,7 @@
       $('setRtp').value = String(Game.settings.rtp);
       $('setHorses').value = String(Game.settings.horses);
       $('setDuration').value = String(Game.settings.duration);
+      $('setRacer').value = Game.settings.racer;
       // 列出可用中文語音（依品質排序）
       var sel = $('setVoice');
       var saved = store.get('voiceName', '');
@@ -347,9 +350,11 @@
       Game.settings.rtp = parseFloat($('setRtp').value);
       Game.settings.horses = parseInt($('setHorses').value, 10);
       Game.settings.duration = parseInt($('setDuration').value, 10);
+      Game.settings.racer = $('setRacer').value;
       store.set('rtp', Game.settings.rtp);
       store.set('horses', Game.settings.horses);
       store.set('duration', Game.settings.duration);
+      store.set('racer', Game.settings.racer);
       var vName = $('setVoice').value;
       store.set('voiceName', vName);
       Voice.setPreferred(vName);

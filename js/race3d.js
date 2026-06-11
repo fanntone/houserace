@@ -96,6 +96,52 @@
     } catch (e) { console.warn(e); }
   })();
 
+  // ---------- 機器人出賽者（three.js RobotExpressive，CC0；含跑/待機/跳舞動畫） ----------
+  var robotAssets = { gltf: null, normScale: 1, yOffset: 0, height: 2.2, pending: [] };
+  (function parseRobot() {
+    if (typeof ROBOT_GLB_BASE64 === 'undefined') return;
+    try {
+      var bin = atob(ROBOT_GLB_BASE64);
+      var buf = new ArrayBuffer(bin.length);
+      var u8 = new Uint8Array(buf);
+      for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      new THREE.GLTFLoader().parse(buf, '', function (gltf) {
+        // 骨架動畫無 morph 影格，包圍盒 API 安全
+        var box = new THREE.Box3().setFromObject(gltf.scene);
+        var size = box.getSize(new THREE.Vector3());
+        robotAssets.normScale = 2.2 / size.y; // 機器人高約 2.2m
+        robotAssets.yOffset = -box.min.y * robotAssets.normScale;
+        robotAssets.gltf = gltf;
+        robotAssets.pending.forEach(function (cb) { cb(); });
+        robotAssets.pending = [];
+      }, function (e) { console.warn('RobotExpressive 解析失敗', e); });
+    } catch (e) { console.warn(e); }
+  })();
+
+  // 頭頂號碼牌（Sprite 永遠面向鏡頭，任何角度可讀）
+  function numberSprite(horse) {
+    var cv = document.createElement('canvas');
+    cv.width = 128; cv.height = 128;
+    var c = cv.getContext('2d');
+    c.beginPath();
+    c.arc(64, 64, 54, 0, Math.PI * 2);
+    c.fillStyle = horse.color.bg;
+    c.fill();
+    c.lineWidth = 8;
+    c.strokeStyle = '#f1f3f5';
+    c.stroke();
+    c.fillStyle = horse.color.fg;
+    c.font = 'bold 72px Arial';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(String(horse.num), 64, 68);
+    var t = new THREE.CanvasTexture(cv);
+    t.encoding = THREE.sRGBEncoding;
+    var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t }));
+    s.scale.set(0.8, 0.8, 1);
+    return s;
+  }
+
   // ---------- 共用場景（同一 canvas 只建一次，逐場只重建馬匹） ----------
   var shared = { renderer: null, scene: null, camera: null, built: false,
                  horsesGroup: null, gateGroup: null, screenCtx: null, screenTex: null,
@@ -120,7 +166,7 @@
 
   // —— 借用 2D 類別的共用數學與主迴圈（drawFrame/_finish/stop 由本類別實作） ——
   ['progressOf', 'distOf', 'rankingAt', 'lanePoint', '_checkMilestones', '_label',
-   'start', 'skip', 'setSpeed', 'drawIdle'].forEach(function (m) {
+   '_W', 'start', 'skip', 'setSpeed', 'drawIdle'].forEach(function (m) {
     RaceAnimator3D.prototype[m] = RaceAnimator.prototype[m];
   });
 
@@ -473,7 +519,11 @@
     this._horses3d = [];
     this._mixers = [];
     this._actions = [];
+    this._robots = [];
     this._prevDist = [];
+    // 出賽者類型：horse | robot（設定切換，下一場生效）
+    this._racerType = (this.opts.racerType === 'robot' &&
+                       typeof ROBOT_GLB_BASE64 !== 'undefined') ? 'robot' : 'horse';
     // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號最內
     this._lat = [];
     for (var li = 0; li < this.horses.length; li++) {
@@ -493,12 +543,16 @@
     sc.fillText(this.opts.infieldSub || '', 256, 196);
     shared.screenTex.needsUpdate = true;
 
-    if (assets.gltf) this._buildHorses();
+    var pool = (this._racerType === 'robot') ? robotAssets : assets;
+    var build = (this._racerType === 'robot')
+      ? function () { self._buildRobots(); }
+      : function () { self._buildHorses(); };
+    if (pool.gltf) build();
     else {
-      var myGroup = shared.horsesGroup; // 防止舊場次的延遲回呼把舊馬加進新場景
-      assets.pending.push(function () {
+      var myGroup = shared.horsesGroup; // 防止舊場次的延遲回呼把舊出賽者加進新場景
+      pool.pending.push(function () {
         if (shared.horsesGroup !== myGroup) return;
-        self._buildHorses();
+        build();
         if (!self.running) self.drawFrame(self.raceTime || 0);
       });
     }
@@ -507,7 +561,9 @@
   RaceAnimator3D.prototype._buildGate = function () {
     var g = new THREE.Group();
     var mat = new THREE.MeshLambertMaterial({ color: 0xd7dde3, transparent: true, opacity: 0.92 });
+    var doorMat = new THREE.MeshLambertMaterial({ color: 0xe8edf2 });
     var n = this.horses.length;
+    g.userData.doors = [];
     for (var k = 0; k <= n; k++) {
       // 各道隔板：短板擋在馬身後半，馬頭探出閘門前緣
       var wall = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.1, 0.1), mat);
@@ -516,6 +572,18 @@
       wall.position.set(p.x - 0.9, 1.05, p.y + off + this.laneGap / 2);
       wall.castShadow = true;
       g.add(wall);
+      // 各道前欄門（頂部鉸鏈，出閘瞬間向上彈開）
+      if (k < n) {
+        var pivot = new THREE.Group();
+        var pd = this.lanePoint(k, 0);
+        pivot.position.set(pd.x + 1.15, 2.0, pd.y);
+        var bar = new THREE.Mesh(
+          new THREE.BoxGeometry(0.08, 1.8, this.laneGap * 0.82), doorMat);
+        bar.position.y = -0.9;
+        pivot.add(bar);
+        g.add(pivot);
+        g.userData.doors.push(pivot);
+      }
     }
     var top = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, n * this.laneGap + 1), mat);
     var pm = this.lanePoint((this.horses.length - 1) / 2, 0);
@@ -693,6 +761,61 @@
     }
   };
 
+  RaceAnimator3D.prototype._buildRobots = function () {
+    if (this._robots.length) return;
+    var yaw = (typeof global.ROBOT_YAW === 'number') ? global.ROBOT_YAW : 0;
+    for (var k = 0; k < this.horses.length; k++) {
+      var horse = this.horses[k];
+      var root = THREE.SkeletonUtils.clone(robotAssets.gltf.scene);
+      var tint = new THREE.Color(horse.color.bg);
+      root.traverse(function (o) {
+        if (o.isMesh || o.isSkinnedMesh) {
+          o.castShadow = true;
+          if (o.material) {
+            o.material = o.material.clone();
+            if (o.material.color) o.material.color.lerp(tint, 0.6); // 染成鞍色、保留明暗
+          }
+        }
+      });
+      root.scale.setScalar(robotAssets.normScale);
+      root.position.y = robotAssets.yOffset;
+      var inner = new THREE.Group(); // 朝向校正層（lookAt 對準 +Z 行進方向）
+      inner.add(root);
+      inner.rotation.y = yaw;
+      var g = new THREE.Group();
+      g.add(inner);
+      var spr = numberSprite(horse);
+      spr.position.set(0, 2.65, 0);
+      g.add(spr);
+      shared.horsesGroup.add(g);
+      this._horses3d.push(g);
+
+      var mixer = new THREE.AnimationMixer(root);
+      var clips = robotAssets.gltf.animations;
+      function act(name) {
+        var c = THREE.AnimationClip.findByName(clips, name);
+        return c ? mixer.clipAction(c) : null;
+      }
+      this._robots.push({
+        mixer: mixer,
+        state: '',
+        actions: { run: act('Running'), idle: act('Idle'), dance: act('Dance') }
+      });
+    }
+  };
+
+  // 機器人動作狀態切換（淡入淡出）
+  function robotSetState(rig, state, timeScale) {
+    var a = rig.actions[state] || rig.actions.run;
+    if (rig.state !== state) {
+      var prev = rig.actions[rig.state];
+      if (prev) prev.fadeOut(0.25);
+      if (a) a.reset().fadeIn(0.25).play();
+      rig.state = state;
+    }
+    if (a && timeScale !== undefined) a.timeScale = timeScale;
+  }
+
   // ---------- 轉播攝影機 ----------
   RaceAnimator3D.prototype._updateCamera = function (time, dt) {
     if (!this._camState) {
@@ -756,53 +879,71 @@
     this.camera.lookAt(cs.look);
   };
 
-  // ---------- 走位系統：出閘向內欄收攏、疊位往外錯開、末段超車外抽 ----------
+  // ---------- 走位系統 ----------
+  // 理論：佔位是「有慣性的決策」——馬保持自己的位置，只在「內側有空檔」時切進去省地，
+  // 被前車擋住才往外疊位；決策有冷卻（0.6s）與黏滯（<0.45 道不動），側移有限速，
+  // 避免無理由的瞬間平移。末段被困的強馬做一次性「外抽」決定後堅持到底。
   RaceAnimator3D.prototype._updateLats = function (time, dt) {
     var n = this.horses.length;
     var rail = n - 1; // 最內側
     if (time <= 0) { // 閘內：固定閘位（1 號最內）
       for (var iz = 0; iz < n; iz++) this._lat[iz] = n - 1 - iz;
+      this._slot = null;
       return;
+    }
+    if (!this._slot) {
+      this._slot = [];
+      this._nextEval = [];
+      this._swing = {};
+      for (var i0 = 0; i0 < n; i0++) {
+        this._slot[i0] = n - 1 - i0;
+        this._nextEval[i0] = 0.4 + Math.random() * 0.5; // 決策時點錯開
+      }
     }
     var s = time / (this.T0 || this.T[this.finishOrder[0]]);
     var ranking = this.rankingAt(time);
+    var BODY = 2.8; // 縱向佔位（一個身位內視為並排）
     var taken = [];
-    var target = [];
     for (var ri = 0; ri < n; ri++) {
       var i = ranking[ri];
       var prog = this.progressOf(i, time);
-      var lat = rail; // 人人都想貼欄（省距離）
-      var guard = 0, moved = true;
-      while (moved && guard++ <= n + 2) { // 前方 4.5m 內已有馬佔位 → 往外錯開疊位
-        moved = false;
-        for (var tj = 0; tj < taken.length; tj++) {
-          if (Math.abs(taken[tj].prog - prog) * this.P0 < 4.5 &&
-              Math.abs(taken[tj].lat - lat) < 0.85) {
-            lat = taken[tj].lat - 0.9;
-            moved = true;
-            break;
+      var cur = this._slot[i];
+      if (time >= this._nextEval[i]) {
+        this._nextEval[i] = time + 0.6; // 決策冷卻
+        // 末段外抽：最終前三若仍被困在第 4 位以後，下定決心往外殺出（一次性）
+        if (s > 0.70 && s < 1.0 && !this._swing[i] &&
+            this.finishOrder.indexOf(i) < 3 && ranking.indexOf(i) > 2) {
+          this._swing[i] = true;
+        }
+        var want = this._swing[i] && s < 1.05
+          ? Math.min(cur, rail - 2.4)
+          : Math.min(rail, cur + 0.9); // 試著往內切一個身位（省地）
+        var lat = want, guard = 0, moved = true;
+        while (moved && guard++ <= n + 3) { // 位置被佔 → 往外讓
+          moved = false;
+          for (var tj = 0; tj < taken.length; tj++) {
+            if (Math.abs(taken[tj].prog - prog) * this.P0 < BODY &&
+                Math.abs(taken[tj].lat - lat) < 0.85) {
+              lat = taken[tj].lat - 0.9;
+              moved = true;
+              break;
+            }
           }
         }
+        if (lat < -0.6) lat = -0.6;
+        if (Math.abs(lat - cur) >= 0.45) this._slot[i] = lat; // 黏滯：小差異不動
       }
-      if (lat < -0.6) lat = -0.6;
-      taken.push({ prog: prog, lat: lat });
-      target[i] = lat;
+      taken.push({ prog: prog, lat: this._slot[i] });
     }
-    // 末段：最終前三名若仍被困在後面，往外抽出展開超車（差し/追込走位）
-    if (s > 0.72 && s < 1.02) {
-      for (var f = 0; f < Math.min(3, n); f++) {
-        var hf = this.finishOrder[f];
-        if (ranking.indexOf(hf) > 2) {
-          target[hf] = Math.min(target[hf], rail - 2.4);
-        }
-      }
-    }
-    // 出閘成形期（前 2%~16% 賽程）：從閘位平滑帶入隊形；之後緩速跟隨目標
+    // 出閘成形期：從閘位平滑帶入；側移限速（中段 0.55 道/秒、末段 1.2 道/秒）
     var form = Math.min(1, Math.max(0, (s - 0.02) / 0.14));
-    var k = 1 - Math.exp(-dt * 1.1);
+    var rate = (s > 0.7 ? 1.2 : 0.55) * dt;
     for (var m = 0; m < n; m++) {
-      var tgt = (n - 1 - m) * (1 - form) + target[m] * form;
-      this._lat[m] += (tgt - this._lat[m]) * k;
+      var tgt = (n - 1 - m) * (1 - form) + this._slot[m] * form;
+      var dlt = tgt - this._lat[m];
+      if (dlt > rate) dlt = rate;
+      else if (dlt < -rate) dlt = -rate;
+      this._lat[m] += dlt;
     }
   };
 
@@ -825,6 +966,25 @@
       var d = this.distOf(k, time);
       var v = (dt > 0 && this._prevDist[k] !== undefined) ? (d - this._prevDist[k]) / dt : 0;
       this._prevDist[k] = d;
+
+      // 機器人出賽者：跑步/待機/冠軍跳舞 狀態機
+      if (this._racerType === 'robot') {
+        var rig = this._robots[k];
+        if (rig) {
+          if (time <= 0) {
+            robotSetState(rig, 'idle', 1);
+          } else if (this.finished && k === this.finishOrder[0] && v < 5) {
+            robotSetState(rig, 'dance', 1); // 冠軍賽後跳舞慶祝
+          } else if (this.finished && v < 0.6) {
+            robotSetState(rig, 'idle', 1);
+          } else {
+            robotSetState(rig, 'run', Math.min(2.4, Math.max(0.6, v / 7.5)));
+          }
+          rig.mixer.update(dt);
+        }
+        continue;
+      }
+
       if (this._mixers[k]) {
         var animDt = moving ? dt * Math.max(v, 0) * assets.clipDur / STRIDE_LEN
                             : dt * 0.12; // 待機小幅踏步；定格(dt=0)凍結
@@ -853,7 +1013,15 @@
         }
       }
     }
-    if (shared.gateGroup) shared.gateGroup.visible = time <= 0.01 || time < 2.0;
+    if (shared.gateGroup) {
+      shared.gateGroup.visible = time <= 0.01 || time < 2.0;
+      // 前欄門：出閘瞬間 0.28 秒內向上彈開
+      var doors = shared.gateGroup.userData.doors || [];
+      var open = time <= 0 ? 0 : Math.min(1, time / 0.28);
+      for (var dk = 0; dk < doors.length; dk++) {
+        doors[dk].rotation.z = -open * 1.9;
+      }
+    }
 
     this._updateCamera(time, dt);
     this.renderer.render(this.scene, this.camera);

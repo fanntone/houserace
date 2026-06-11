@@ -85,6 +85,7 @@
     //   g_i = 集團內深度：中段維持小深度（緊咬膠著、依跑法此消彼長），
     //         末段 28% 平滑混合到精確最終差距 G_i = (T_i−T0)/T0 ⇒ p_i(T_i) = 1 精確
     this.T0 = this.T[this.finishOrder[0]];
+    this._gateHold = 2.6; // 出閘前停閘秒數（鏡頭停在閘口、各就各位）
     this.pace = [];
     for (var i = 0; i < n; i++) {
       var style = Math.random();                       // 跑法：0 逃馬（貼前）→ 1 後追
@@ -94,7 +95,7 @@
         amp: 0.0012 + Math.random() * 0.0024,           // 集團內小幅消長（無突兀加速）
         f: 0.5 + Math.random() * 0.7,
         ph: Math.random() * Math.PI * 2,
-        G: (this.T[i] - this.T0) / this.T0              // 最終差距（保證精準壓線）
+        G: this._W(this.T[i] / this.T0) - 1             // 最終差距（含起步加速曲線，保證精準壓線）
       });
     }
     this.photoFinish = (T[this.finishOrder[1]] - T[this.finishOrder[0]]) < 0.06;
@@ -120,6 +121,12 @@
 
   function smoothstep01(x) { return x * x * (3 - 2 * x); }
 
+  // 共同配速的起步加速曲線：出閘瞬間約 25% 速度、2~3 秒內升到全速。
+  // W(s) = s − A(1 − e^(−s/τ))，單調遞增；最終差距 G 以 W 計算 ⇒ 壓線時刻仍精確。
+  RaceAnimator.prototype._W = function (s) {
+    return s - 0.045 * (1 - Math.exp(-s / 0.06));
+  };
+
   // 進度（0 → 1 衝線；衝線後減速續跑，軟漸近 1.12 且嚴格保序，不會繞回）
   // 中段：馬群緊咬（深度 ≤ 約1.4% 賽程 ≈ 數個馬身），依跑法風格小幅消長；
   // 末段 28%：深度平滑混合到最終差距 ⇒ 後追馬掃過、力竭馬被吞，且壓線時刻精確。
@@ -136,7 +143,7 @@
     var b = ramp * (pc.base + pc.amp * Math.sin(2 * Math.PI * pc.f * s + pc.ph));
     if (b < 0) b = 0;
     var w = (s <= 0.72) ? 0 : (s >= 1 ? 1 : smoothstep01((s - 0.72) / 0.28));
-    var p = s - (b * (1 - w) + pc.G * w);
+    var p = this._W(s) - (b * (1 - w) + pc.G * w); // W：靜止出閘的加速曲線
     return p > 0 ? p : 0;
   };
 
@@ -811,6 +818,9 @@
     if (this.running) return;
     this.running = true;
     this.raceTime = 0;
+    if (this._gateHold > 0 && this.opts.onCommentary) {
+      this.opts.onCommentary('馬匹進閘完畢，各就各位──');
+    }
     var self = this;
     var last = null;
     function loop(now) {
@@ -819,7 +829,9 @@
       var dt = Math.min((now - last) / 1000, 0.1);
       last = now;
       self._flash = Math.max(0, self._flash - dt * 2.2);
-      if (self._freeze > 0) {
+      if (self._gateHold > 0) {
+        self._gateHold -= dt; // 停閘：鏡頭停在閘口，時間不前進
+      } else if (self._freeze > 0) {
         self._freeze -= dt; // 壓線定格：時間暫停，畫面停在過線瞬間
       } else {
         // 相片裁判等級的貼身賽：衝線前後切慢動作
@@ -901,6 +913,7 @@
     if (!this.running) return;
     // 觸發尚未播出的旁述後直接收尾
     this.raceTime = this.endTime;
+    this._gateHold = 0;
     this._freeze = 0;
     this._flash = 0;
     this._slowmo = false;

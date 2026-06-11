@@ -96,12 +96,28 @@
     } catch (e) { console.warn(e); }
   })();
 
-  // ---------- 機器人出賽者（three.js RobotExpressive，CC0；含跑/待機/跳舞動畫） ----------
-  var robotAssets = { gltf: null, normScale: 1, yOffset: 0, height: 2.2, pending: [] };
-  (function parseRobot() {
-    if (typeof ROBOT_GLB_BASE64 === 'undefined') return;
+  // ---------- 骨架出賽者註冊表（皆 CC0；惰性解析，首次選用才載入） ----------
+  // clips 以「結尾比對」找動畫（Quaternius 匯出名稱帶 Armature 前綴）
+  var SKINNED = {
+    robot: {
+      b64: 'ROBOT_GLB_BASE64', height: 2.2, badgeY: 2.65, tint: 0.6, runDiv: 7.5, glow: 0x1c1c1c,
+      clips: { run: 'Running', idle: 'Idle', win: 'Dance' },
+      pool: null
+    },
+    cat: {
+      b64: 'CAT_GLB_BASE64', height: 1.45, badgeY: 2.0, tint: 0.18, runDiv: 6.0, glow: 0x6e6e6e,
+      clips: { run: 'Run', idle: 'Idle', win: 'Jump_Loop' },
+      pool: null
+    }
+  };
+
+  function skinnedPool(type) {
+    var cfg = SKINNED[type];
+    if (!cfg || typeof global[cfg.b64] === 'undefined') return null;
+    if (cfg.pool) return cfg.pool;
+    var pool = cfg.pool = { gltf: null, normScale: 1, yOffset: 0, pending: [] };
     try {
-      var bin = atob(ROBOT_GLB_BASE64);
+      var bin = atob(global[cfg.b64]);
       var buf = new ArrayBuffer(bin.length);
       var u8 = new Uint8Array(buf);
       for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -109,14 +125,15 @@
         // 骨架動畫無 morph 影格，包圍盒 API 安全
         var box = new THREE.Box3().setFromObject(gltf.scene);
         var size = box.getSize(new THREE.Vector3());
-        robotAssets.normScale = 2.2 / size.y; // 機器人高約 2.2m
-        robotAssets.yOffset = -box.min.y * robotAssets.normScale;
-        robotAssets.gltf = gltf;
-        robotAssets.pending.forEach(function (cb) { cb(); });
-        robotAssets.pending = [];
-      }, function (e) { console.warn('RobotExpressive 解析失敗', e); });
+        pool.normScale = cfg.height / size.y;
+        pool.yOffset = -box.min.y * pool.normScale;
+        pool.gltf = gltf;
+        pool.pending.forEach(function (cb) { cb(); });
+        pool.pending = [];
+      }, function (e) { console.warn(type + ' 模型解析失敗', e); });
     } catch (e) { console.warn(e); }
-  })();
+    return pool;
+  }
 
   // 頭頂號碼牌（Sprite 永遠面向鏡頭，任何角度可讀）
   function numberSprite(horse) {
@@ -521,9 +538,10 @@
     this._actions = [];
     this._robots = [];
     this._prevDist = [];
-    // 出賽者類型：horse | robot（設定切換，下一場生效）
-    this._racerType = (this.opts.racerType === 'robot' &&
-                       typeof ROBOT_GLB_BASE64 !== 'undefined') ? 'robot' : 'horse';
+    // 出賽者類型：horse | robot | cat…（設定切換，下一場生效）
+    this._racerType = (SKINNED[this.opts.racerType] &&
+                       typeof global[SKINNED[this.opts.racerType].b64] !== 'undefined')
+      ? this.opts.racerType : 'horse';
     // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號最內
     this._lat = [];
     for (var li = 0; li < this.horses.length; li++) {
@@ -543,9 +561,9 @@
     sc.fillText(this.opts.infieldSub || '', 256, 196);
     shared.screenTex.needsUpdate = true;
 
-    var pool = (this._racerType === 'robot') ? robotAssets : assets;
-    var build = (this._racerType === 'robot')
-      ? function () { self._buildRobots(); }
+    var pool = (this._racerType !== 'horse') ? skinnedPool(this._racerType) : assets;
+    var build = (this._racerType !== 'horse')
+      ? function () { self._buildSkinned(); }
       : function () { self._buildHorses(); };
     if (pool.gltf) build();
     else {
@@ -761,45 +779,61 @@
     }
   };
 
-  RaceAnimator3D.prototype._buildRobots = function () {
+  RaceAnimator3D.prototype._buildSkinned = function () {
     if (this._robots.length) return;
-    var yaw = (typeof global.ROBOT_YAW === 'number') ? global.ROBOT_YAW : 0;
+    var cfg = SKINNED[this._racerType];
+    var pool = cfg.pool;
+    var yaw = (typeof global.RACER_YAW === 'number') ? global.RACER_YAW : 0;
     for (var k = 0; k < this.horses.length; k++) {
       var horse = this.horses[k];
-      var root = THREE.SkeletonUtils.clone(robotAssets.gltf.scene);
+      var root = THREE.SkeletonUtils.clone(pool.gltf.scene);
       var tint = new THREE.Color(horse.color.bg);
       root.traverse(function (o) {
         if (o.isMesh || o.isSkinnedMesh) {
           o.castShadow = true;
           if (o.material) {
             o.material = o.material.clone();
-            if (o.material.color) o.material.color.lerp(tint, 0.6); // 染成鞍色、保留明暗
+            // 場景無環境貼圖：金屬度必須歸零，否則 PBR 金屬成分會渲染成黑色
+            if (o.material.metalness !== undefined) o.material.metalness = 0;
+            if (o.material.roughness !== undefined) o.material.roughness = 0.85;
+            // 玩具質感：用貼圖當自發光圖，給背光面一層底光（鮮亮可愛）
+            if (cfg.glow && o.material.emissive !== undefined && o.material.map) {
+              o.material.emissiveMap = o.material.map;
+              o.material.emissive.setHex(cfg.glow);
+            }
+            if (o.material.color) o.material.color.lerp(tint, cfg.tint); // 染成鞍色、保留明暗
           }
         }
       });
-      root.scale.setScalar(robotAssets.normScale);
-      root.position.y = robotAssets.yOffset;
+      root.scale.setScalar(pool.normScale);
+      root.position.y = pool.yOffset;
       var inner = new THREE.Group(); // 朝向校正層（lookAt 對準 +Z 行進方向）
       inner.add(root);
       inner.rotation.y = yaw;
       var g = new THREE.Group();
       g.add(inner);
       var spr = numberSprite(horse);
-      spr.position.set(0, 2.65, 0);
+      spr.position.set(0, cfg.badgeY, 0);
       g.add(spr);
       shared.horsesGroup.add(g);
       this._horses3d.push(g);
 
       var mixer = new THREE.AnimationMixer(root);
-      var clips = robotAssets.gltf.animations;
-      function act(name) {
-        var c = THREE.AnimationClip.findByName(clips, name);
-        return c ? mixer.clipAction(c) : null;
+      var clips = pool.gltf.animations;
+      function act(suffix) { // 以結尾比對（Quaternius 匯出名稱帶 Armature 前綴）
+        for (var c = 0; c < clips.length; c++) {
+          var nm = clips[c].name;
+          if (nm === suffix || nm.slice(-(suffix.length + 1)) === '|' + suffix ||
+              nm.slice(-suffix.length) === suffix) {
+            return mixer.clipAction(clips[c]);
+          }
+        }
+        return null;
       }
       this._robots.push({
         mixer: mixer,
         state: '',
-        actions: { run: act('Running'), idle: act('Idle'), dance: act('Dance') }
+        actions: { run: act(cfg.clips.run), idle: act(cfg.clips.idle), dance: act(cfg.clips.win) }
       });
     }
   };
@@ -967,18 +1001,19 @@
       var v = (dt > 0 && this._prevDist[k] !== undefined) ? (d - this._prevDist[k]) / dt : 0;
       this._prevDist[k] = d;
 
-      // 機器人出賽者：跑步/待機/冠軍跳舞 狀態機
-      if (this._racerType === 'robot') {
+      // 骨架出賽者（機器人/貓…）：跑步/待機/冠軍慶祝 狀態機
+      if (this._racerType !== 'horse') {
         var rig = this._robots[k];
         if (rig) {
+          var rcfg = SKINNED[this._racerType];
           if (time <= 0) {
             robotSetState(rig, 'idle', 1);
           } else if (this.finished && k === this.finishOrder[0] && v < 5) {
-            robotSetState(rig, 'dance', 1); // 冠軍賽後跳舞慶祝
+            robotSetState(rig, 'dance', 1); // 冠軍賽後慶祝（機器人跳舞、貓跳躍）
           } else if (this.finished && v < 0.6) {
             robotSetState(rig, 'idle', 1);
           } else {
-            robotSetState(rig, 'run', Math.min(2.4, Math.max(0.6, v / 7.5)));
+            robotSetState(rig, 'run', Math.min(2.4, Math.max(0.6, v / rcfg.runDiv)));
           }
           rig.mixer.update(dt);
         }

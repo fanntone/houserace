@@ -85,7 +85,8 @@
     //   g_i = 集團內深度：中段維持小深度（緊咬膠著、依跑法此消彼長），
     //         末段 28% 平滑混合到精確最終差距 G_i = (T_i−T0)/T0 ⇒ p_i(T_i) = 1 精確
     this.T0 = this.T[this.finishOrder[0]];
-    this._gateHold = 2.6; // 出閘前停閘秒數（鏡頭停在閘口、各就各位）
+    this._gateHold = 3.0; // 出閘前停閘秒數（3-2-1 倒數、各就各位）
+    this._goFlash = 0;    // 出閘瞬間「開跑！」爆閃
     this.pace = [];
     for (var i = 0; i < n; i++) {
       var style = Math.random();                       // 跑法：0 逃馬（貼前）→ 1 後追
@@ -829,8 +830,10 @@
       var dt = Math.min((now - last) / 1000, 0.1);
       last = now;
       self._flash = Math.max(0, self._flash - dt * 2.2);
+      self._goFlash = Math.max(0, (self._goFlash || 0) - dt);
       if (self._gateHold > 0) {
-        self._gateHold -= dt; // 停閘：鏡頭停在閘口，時間不前進
+        self._gateHold -= dt; // 停閘：鏡頭停在閘口，3-2-1 倒數
+        if (self._gateHold <= 0) self._goFlash = 0.9; // 出閘瞬間
       } else if (self._freeze > 0) {
         self._freeze -= dt; // 壓線定格：時間暫停，畫面停在過線瞬間
       } else {

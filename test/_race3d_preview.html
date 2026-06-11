@@ -52,12 +52,13 @@ var timer = setInterval(function () {
   if (!didDrive) {
     didDrive = true;
     if (state === 'idle') { an.drawFrame(0); }
+    else if (state === 'count') { an._gateHold = 1.4; an.running = true; an.drawFrame(0); } // 倒數中（顯示 2）
     else if (state === 'turn') { drive(4, 7.8); }
     else if (state === 'finish') { drive(33, 38.0); an._freeze = 0.5; an._flash = 0.25; an.drawFrame(38.02); }
     else if (state === 'end') { drive(36, an.endTime + 2.5); } // 賽後勝利者環繞鏡頭
     else { drive(15, 19); }
   } else {
-    var t = { idle: 0, turn: 7.8, finish: 38.02, end: an.endTime + 2.5 }[state];
+    var t = { idle: 0, count: 0, turn: 7.8, finish: 38.02, end: an.endTime + 2.5 }[state];
     an.drawFrame(t === undefined ? 19 : t);
     return;
   }

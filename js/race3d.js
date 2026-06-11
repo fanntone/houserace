@@ -663,6 +663,12 @@
   // ---------- 每場重建：馬匹 + 號碼布 + 騎師 + 閘門 + 大螢幕文字 ----------
   RaceAnimator3D.prototype._buildRound = function () {
     var self = this;
+    // 出賽者類型：horse | cat（程序化）| robot（GLB）；設定切換，下一場生效
+    // （必須先決定型別，閘箱高度要隨出賽者身高自適應）
+    var rt = this.opts.racerType;
+    this._racerType = (rt === 'cat') ? 'cat'
+      : (SKINNED[rt] && typeof global[SKINNED[rt].b64] !== 'undefined') ? rt : 'horse';
+
     if (shared.horsesGroup) { this.scene.remove(shared.horsesGroup); }
     if (shared.gateGroup) { this.scene.remove(shared.gateGroup); }
     shared.horsesGroup = new THREE.Group();
@@ -674,10 +680,8 @@
     this._actions = [];
     this._robots = [];
     this._prevDist = [];
-    // 出賽者類型：horse | cat（程序化）| robot（GLB）；設定切換，下一場生效
-    var rt = this.opts.racerType;
-    this._racerType = (rt === 'cat') ? 'cat'
-      : (SKINNED[rt] && typeof global[SKINNED[rt].b64] !== 'undefined') ? rt : 'horse';
+    this._lastDigit = null; // 出閘倒數顯示/嗶聲
+    this._goBeeped = false;
     // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號最內
     this._lat = [];
     for (var li = 0; li < this.horses.length; li++) {
@@ -721,31 +725,33 @@
     var mat = new THREE.MeshLambertMaterial({ color: 0xd7dde3, transparent: true, opacity: 0.92 });
     var doorMat = new THREE.MeshLambertMaterial({ color: 0xe8edf2 });
     var n = this.horses.length;
+    // 閘箱高度隨出賽者身高自適應（貓矮，高欄會整個擋住）
+    var gh = (this._racerType === 'cat') ? 1.1 : 2.05;
     g.userData.doors = [];
     for (var k = 0; k <= n; k++) {
-      // 各道隔板：短板擋在馬身後半，馬頭探出閘門前緣
-      var wall = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.1, 0.1), mat);
+      // 各道隔板：短板擋在身後半，頭部探出閘門前緣
+      var wall = new THREE.Mesh(new THREE.BoxGeometry(1.8, gh, 0.1), mat);
       var p = this.lanePoint(Math.min(k, n - 1), 0);
       var off = (k === n) ? -this.laneGap : 0;
-      wall.position.set(p.x - 0.9, 1.05, p.y + off + this.laneGap / 2);
+      wall.position.set(p.x - 0.9, gh / 2, p.y + off + this.laneGap / 2);
       wall.castShadow = true;
       g.add(wall);
       // 各道前欄門（頂部鉸鏈，出閘瞬間向上彈開）
       if (k < n) {
         var pivot = new THREE.Group();
         var pd = this.lanePoint(k, 0);
-        pivot.position.set(pd.x + 1.15, 2.0, pd.y);
+        pivot.position.set(pd.x + 1.15, gh - 0.08, pd.y);
         var bar = new THREE.Mesh(
-          new THREE.BoxGeometry(0.08, 1.8, this.laneGap * 0.82), doorMat);
-        bar.position.y = -0.9;
+          new THREE.BoxGeometry(0.08, gh * 0.86, this.laneGap * 0.82), doorMat);
+        bar.position.y = -gh * 0.43;
         pivot.add(bar);
         g.add(pivot);
         g.userData.doors.push(pivot);
       }
     }
-    var top = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.25, n * this.laneGap + 1), mat);
+    var top = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.22, n * this.laneGap + 1), mat);
     var pm = this.lanePoint((this.horses.length - 1) / 2, 0);
-    top.position.set(pm.x - 0.9, 2.45, pm.y);
+    top.position.set(pm.x - 0.9, gh + 0.32, pm.y);
     g.add(top);
     return g;
   };
@@ -1019,10 +1025,11 @@
 
     if (time <= 0) {
       shot = 'gate';
-      var gp = this.pathPt(11, 9);                 // 閘門斜前方近距
+      var low = this._racerType === 'cat'; // 貓視角放低，貼著小傢伙們的臉
+      var gp = this.pathPt(11, low ? 7 : 9);       // 閘門斜前方近距
       var gl = this.lanePoint((n - 1) / 2, 0);
-      posT.set(gp.x, 2.6, gp.z);
-      lookT.set(gl.x + 1.2, 1.4, gl.y);
+      posT.set(gp.x, low ? 1.6 : 2.6, gp.z);
+      lookT.set(gl.x + 1.2, low ? 0.8 : 1.4, gl.y);
     } else {
       var ranking = this.rankingAt(time);
       var wts = [0.5, 0.3, 0.2], wd = 0;
@@ -1050,10 +1057,10 @@
         posT.set(fp.x, 4.6, fp.z);
         lookT.set(fl.x * 0.45 + cxp * 0.55, 1.6, fl.y * 0.45 + czp * 0.55);
       } else {
-        shot = 'follow'; // 場外跟拍車（貼近馬群，朝行進方向略帶前視）
-        var cp = this.pathPt(wd - 6, 15);
-        posT.set(cp.x, 5.2, cp.z);
-        lookT.set(cxp + cp.tx * 6, 1.5, czp + cp.tz * 6);
+        shot = 'follow'; // 前導跟拍車：鏡頭在集團前方回頭拍，迎面看得到臉
+        var cp = this.pathPt(wd + 13, 14);
+        posT.set(cp.x, 4.6, cp.z);
+        lookT.set(cxp, 1.3, czp);
       }
     }
 
@@ -1287,6 +1294,50 @@
       ctx.stroke();
     }
     ctx.restore();
+
+    // 出閘倒數：大字 3-2-1（縮放彈跳）+ 嗶聲——只在開賽啟動後顯示
+    if (this.running && this._gateHold > 0) {
+      var digit = Math.ceil(this._gateHold);
+      if (digit !== this._lastDigit) {
+        this._lastDigit = digit;
+        if (typeof Voice !== 'undefined' && Voice.beep) Voice.beep(880, 130);
+      }
+      var dfrac = this._gateHold - Math.floor(this._gateHold);
+      var pop = 1 + (1 - dfrac) * 0.22;
+      ctx.save();
+      ctx.translate(W / 2, H * 0.42);
+      ctx.scale(pop, pop);
+      ctx.beginPath();
+      ctx.arc(0, 0, 62, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(13,17,23,0.6)';
+      ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#ffd43b';
+      ctx.stroke();
+      ctx.fillStyle = '#ffd43b';
+      ctx.font = 'bold 84px "Microsoft JhengHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(digit), 0, 30);
+      ctx.restore();
+    }
+    // 出閘瞬間「開跑！」爆閃
+    if (this._goFlash > 0) {
+      if (!this._goBeeped) {
+        this._goBeeped = true;
+        if (typeof Voice !== 'undefined' && Voice.beep) Voice.beep(1568, 320);
+      }
+      var ga = Math.min(1, this._goFlash / 0.5);
+      ctx.save();
+      ctx.globalAlpha = ga;
+      ctx.fillStyle = '#ffd43b';
+      ctx.font = 'bold 88px "Microsoft JhengHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.strokeStyle = 'rgba(13,17,23,0.85)';
+      ctx.lineWidth = 10;
+      ctx.strokeText('開跑！', W / 2, H * 0.44);
+      ctx.fillText('開跑！', W / 2, H * 0.44);
+      ctx.restore();
+    }
 
     // 慢動作 / 白閃 / 定格字卡
     if (this._slowmo && this._freeze <= 0) {

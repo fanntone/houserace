@@ -87,6 +87,27 @@
     if (supported) { try { speechSynthesis.cancel(); } catch (e) {} }
   }
 
+  // 出閘倒數嗶聲（WebAudio 合成，無音檔）
+  var actx = null;
+  function beep(freq, ms) {
+    if (!enabled) return;
+    try {
+      actx = actx || new (global.AudioContext || global.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      var o = actx.createOscillator();
+      var gn = actx.createGain();
+      o.type = 'sine';
+      o.frequency.value = freq;
+      gn.gain.setValueAtTime(0.0001, actx.currentTime);
+      gn.gain.exponentialRampToValueAtTime(0.22, actx.currentTime + 0.012);
+      gn.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + ms / 1000);
+      o.connect(gn);
+      gn.connect(actx.destination);
+      o.start();
+      o.stop(actx.currentTime + ms / 1000 + 0.05);
+    } catch (e) { /* 無聲也不影響遊戲 */ }
+  }
+
   global.Voice = {
     supported: supported,
     speak: speak,
@@ -95,6 +116,7 @@
     isEnabled: function () { return enabled; },
     listZh: listZh,
     setPreferred: function (name) { preferredName = name || null; pickVoice(); },
-    currentName: function () { return voice ? voice.name : '(無)'; }
+    currentName: function () { return voice ? voice.name : '(無)'; },
+    beep: beep
   };
 })(window);

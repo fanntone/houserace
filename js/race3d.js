@@ -103,11 +103,6 @@
       b64: 'ROBOT_GLB_BASE64', height: 2.2, badgeY: 2.65, tint: 0.6, runDiv: 7.5, glow: 0x1c1c1c,
       clips: { run: 'Running', idle: 'Idle', win: 'Dance' },
       pool: null
-    },
-    cat: {
-      b64: 'CAT_GLB_BASE64', height: 1.45, badgeY: 2.0, tint: 0.18, runDiv: 6.0, glow: 0x6e6e6e,
-      clips: { run: 'Run', idle: 'Idle', win: 'Jump_Loop' },
-      pool: null
     }
   };
 
@@ -157,6 +152,147 @@
     var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t }));
     s.scale.set(0.8, 0.8, 1);
     return s;
+  }
+
+  // ---------- 程序化 Q 版貓（圓潤卡通風，全球體/膠囊無稜角；參考彩色卡通貓插畫） ----------
+  var CAT_COATS = [
+    { body: 0xf5a25a, dark: 0xd97f33 }, // 橘貓
+    { body: 0x9aa3ad, dark: 0x7b848e }, // 灰貓
+    { body: 0x3d3d46, dark: 0x282830 }, // 黑貓
+    { body: 0xf3f0ea, dark: 0xd9d4c8 }, // 白貓
+    { body: 0xe8d3a8, dark: 0xc9ae7e }, // 奶油
+    { body: 0xb07a4a, dark: 0x8a5a30 }, // 棕虎斑
+    { body: 0x7e8ca0, dark: 0x627084 }, // 藍灰
+    { body: 0xefb98a, dark: 0xd29257 }, // 淺橘
+    { body: 0x8a7466, dark: 0x6b574b }, // 煙棕
+    { body: 0xcfc3b8, dark: 0xb0a193 }, // 米灰
+    { body: 0x6e5f72, dark: 0x554a59 }, // 紫灰
+    { body: 0xd9a386, dark: 0xb87f5e }  // 蜜桃
+  ];
+
+  function buildChibiCat(horse) {
+    var coat = CAT_COATS[(horse.num - 1) % CAT_COATS.length];
+    var matBody = new THREE.MeshLambertMaterial({ color: coat.body });
+    var matDark = new THREE.MeshLambertMaterial({ color: coat.dark });
+    var matWhite = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    var matPink = new THREE.MeshLambertMaterial({ color: 0xff9eb5 });
+    var matBlack = new THREE.MeshLambertMaterial({ color: 0x24211f });
+    var matCollar = new THREE.MeshLambertMaterial({ color: horse.color.bg });
+
+    var cat = new THREE.Group();
+    var bob = new THREE.Group(); // 起伏層（奔跑彈跳作用於此）
+    cat.add(bob);
+
+    // 圓胖身體 + 白肚
+    var body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 24, 18), matBody);
+    body.scale.set(0.82, 0.72, 1.0);
+    body.position.set(0, 0.5, -0.08);
+    body.castShadow = true;
+    bob.add(body);
+    var belly = new THREE.Mesh(new THREE.SphereGeometry(0.34, 18, 14), matWhite);
+    belly.scale.set(0.72, 0.62, 0.8);
+    belly.position.set(0, 0.4, 0.14);
+    bob.add(belly);
+
+    // 大頭
+    var head = new THREE.Group();
+    head.position.set(0, 1.02, 0.3);
+    bob.add(head);
+    var skull = new THREE.Mesh(new THREE.SphereGeometry(0.46, 28, 22), matBody);
+    skull.scale.set(1.06, 0.9, 0.92);
+    skull.castShadow = true;
+    head.add(skull);
+    // 白吻部 + 粉鼻
+    var muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.23, 18, 14), matWhite);
+    muzzle.scale.set(1.2, 0.78, 0.7);
+    muzzle.position.set(0, -0.15, 0.3);
+    head.add(muzzle);
+    var nose = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), matPink);
+    nose.scale.set(1.2, 0.8, 0.8);
+    nose.position.set(0, -0.06, 0.46);
+    head.add(nose);
+    // 大眼 + 高光
+    [-1, 1].forEach(function (sx) {
+      var eye = new THREE.Mesh(new THREE.SphereGeometry(0.088, 14, 12), matBlack);
+      eye.scale.set(1, 1.25, 0.55);
+      eye.position.set(sx * 0.185, 0.06, 0.36);
+      head.add(eye);
+      var glint = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), matWhite);
+      glint.position.set(sx * 0.155, 0.115, 0.42);
+      head.add(glint);
+    });
+    // 三角耳（外耳 + 粉內耳），圓錐高分段 = 平滑
+    var ears = [];
+    [-1, 1].forEach(function (sx) {
+      var ear = new THREE.Group();
+      ear.position.set(sx * 0.27, 0.36, 0.0);
+      ear.rotation.z = -sx * 0.3;
+      ear.userData.baseZ = -sx * 0.3;
+      var outer = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.28, 16), matBody);
+      outer.scale.z = 0.5;
+      outer.castShadow = true;
+      ear.add(outer);
+      var innerE = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.18, 12), matPink);
+      innerE.scale.z = 0.42;
+      innerE.position.set(0, -0.015, 0.035);
+      ear.add(innerE);
+      head.add(ear);
+      ears.push(ear);
+    });
+    // 鬍鬚
+    [-1, 1].forEach(function (sx) {
+      for (var w = 0; w < 2; w++) {
+        var wh = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.26, 4), matWhite);
+        wh.rotation.z = Math.PI / 2 + sx * 0.15;
+        wh.rotation.y = sx * 0.3;
+        wh.position.set(sx * 0.3, -0.1 - w * 0.055, 0.3);
+        head.add(wh);
+      }
+    });
+
+    // 鞍色項圈 + 金鈴鐺（下注身分識別）
+    var collar = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.05, 10, 22), matCollar);
+    collar.rotation.x = Math.PI / 2 - 0.22;
+    collar.position.set(0, 0.8, 0.2);
+    bob.add(collar);
+    var bell = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10),
+      new THREE.MeshLambertMaterial({ color: 0xf5c518 }));
+    bell.position.set(0, 0.7, 0.46);
+    bob.add(bell);
+
+    // 短胖四肢（肩/髖樞紐）+ 白手套腳掌
+    var legs = [];
+    [[-0.2, 0.26], [0.2, 0.26], [-0.2, -0.34], [0.2, -0.34]].forEach(function (p) {
+      var hip = new THREE.Group();
+      hip.position.set(p[0], 0.34, p[1]);
+      var leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.2, 6, 12), matBody);
+      leg.position.y = -0.15;
+      leg.castShadow = true;
+      hip.add(leg);
+      var paw = new THREE.Mesh(new THREE.SphereGeometry(0.092, 12, 10), matWhite);
+      paw.scale.set(1, 0.7, 1.15);
+      paw.position.set(0, -0.29, 0.03);
+      hip.add(paw);
+      bob.add(hip);
+      legs.push(hip);
+    });
+
+    // 上翹尾巴（深色尾尖）
+    var tail = new THREE.Group();
+    tail.position.set(0, 0.6, -0.52);
+    var seg1 = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.3, 6, 12), matBody);
+    seg1.rotation.x = 0.85;
+    seg1.position.set(0, 0.1, -0.1);
+    seg1.castShadow = true;
+    tail.add(seg1);
+    var seg2 = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.2, 6, 12), matDark);
+    seg2.rotation.x = 0.15;
+    seg2.position.set(0, 0.32, -0.18);
+    tail.add(seg2);
+    bob.add(tail);
+
+    cat.userData = { bob: bob, head: head, ears: ears, legs: legs, tail: tail };
+    return cat;
   }
 
   // ---------- 共用場景（同一 canvas 只建一次，逐場只重建馬匹） ----------
@@ -538,10 +674,10 @@
     this._actions = [];
     this._robots = [];
     this._prevDist = [];
-    // 出賽者類型：horse | robot | cat…（設定切換，下一場生效）
-    this._racerType = (SKINNED[this.opts.racerType] &&
-                       typeof global[SKINNED[this.opts.racerType].b64] !== 'undefined')
-      ? this.opts.racerType : 'horse';
+    // 出賽者類型：horse | cat（程序化）| robot（GLB）；設定切換，下一場生效
+    var rt = this.opts.racerType;
+    this._racerType = (rt === 'cat') ? 'cat'
+      : (SKINNED[rt] && typeof global[SKINNED[rt].b64] !== 'undefined') ? rt : 'horse';
     // 動態側位（單位：道；值越大越靠內欄）。閘位採真實規則：1 號最內
     this._lat = [];
     for (var li = 0; li < this.horses.length; li++) {
@@ -561,6 +697,10 @@
     sc.fillText(this.opts.infieldSub || '', 256, 196);
     shared.screenTex.needsUpdate = true;
 
+    if (this._racerType === 'cat') {
+      this._buildCats(); // 程序化建模，無需等待資產
+      return;
+    }
     var pool = (this._racerType !== 'horse') ? skinnedPool(this._racerType) : assets;
     var build = (this._racerType !== 'horse')
       ? function () { self._buildSkinned(); }
@@ -776,6 +916,23 @@
       action.time = (horse.num * 0.137) % action.getClip().duration; // 步伐錯開
       this._mixers.push(mixer);
       this._actions.push(action);
+    }
+  };
+
+  RaceAnimator3D.prototype._buildCats = function () {
+    if (this._horses3d.length) return;
+    for (var k = 0; k < this.horses.length; k++) {
+      var horse = this.horses[k];
+      var g = new THREE.Group();
+      var cat = buildChibiCat(horse);
+      cat.scale.setScalar(1.15);
+      g.add(cat);
+      g.userData.chibi = cat.userData;
+      var spr = numberSprite(horse);
+      spr.position.set(0, 2.15, 0);
+      g.add(spr);
+      shared.horsesGroup.add(g);
+      this._horses3d.push(g);
     }
   };
 
@@ -1001,7 +1158,40 @@
       var v = (dt > 0 && this._prevDist[k] !== undefined) ? (d - this._prevDist[k]) / dt : 0;
       this._prevDist[k] = d;
 
-      // 骨架出賽者（機器人/貓…）：跑步/待機/冠軍慶祝 狀態機
+      // 程序化 Q 版貓：對角小跑、彈跳、擺尾；冠軍勝利蹦跳
+      if (this._racerType === 'cat') {
+        var cd = g.userData.chibi;
+        if (cd) {
+          if (!this._catPh) this._catPh = [];
+          // 步幅 1.05m：腿頻與地速同步（與馬同原理）
+          var cph = this._catPh[k] = (this._catPh[k] || 0) + Math.max(v, 0) * dt / 1.05 * Math.PI * 2;
+          var li;
+          if (this.finished && k === this.finishOrder[0] && v < 5) {
+            var hop = Math.abs(Math.sin(time * 5));
+            cd.bob.position.y = hop * 0.3;
+            cd.bob.rotation.x = -0.18;
+            for (li = 0; li < 4; li++) cd.legs[li].rotation.x = -0.55; // 收腿蹦跳
+            cd.tail.rotation.y = Math.sin(time * 8) * 0.5;
+          } else if (time <= 0 || (this.finished && v < 0.6)) {
+            cd.bob.position.y = 0;
+            cd.bob.rotation.x = 0;
+            for (li = 0; li < 4; li++) cd.legs[li].rotation.x = 0;
+            cd.tail.rotation.y = 0.18; // 站姿，尾巴微翹
+          } else {
+            for (li = 0; li < 4; li++) { // 對角步
+              cd.legs[li].rotation.x = Math.sin(cph + ((li === 0 || li === 3) ? 0 : Math.PI)) * 0.85;
+            }
+            cd.bob.position.y = Math.abs(Math.sin(cph)) * 0.08;
+            cd.bob.rotation.x = Math.sin(cph * 2) * 0.04 - 0.05;
+            cd.tail.rotation.y = Math.sin(cph * 0.5) * 0.35;
+            cd.ears[0].rotation.z = cd.ears[0].userData.baseZ + Math.sin(cph) * 0.06;
+            cd.ears[1].rotation.z = cd.ears[1].userData.baseZ - Math.sin(cph) * 0.06;
+          }
+        }
+        continue;
+      }
+
+      // 骨架出賽者（機器人…）：跑步/待機/冠軍慶祝 狀態機
       if (this._racerType !== 'horse') {
         var rig = this._robots[k];
         if (rig) {

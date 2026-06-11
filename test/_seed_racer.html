@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html><body>
+<script>
+// 測試用：把出賽者設定寫成貓（store.set 是 JSON 序列化，值要含引號）
+localStorage.setItem('hr_racer', '"cat"');
+localStorage.setItem('hr_helpSeen', 'true');
+localStorage.setItem('hr_pending', 'null');
+document.body.textContent = 'seeded: ' + localStorage.getItem('hr_racer');
+</script>
+</body></html>

@@ -330,6 +330,17 @@
       $('setRtp').value = String(Game.settings.rtp);
       $('setHorses').value = String(Game.settings.horses);
       $('setDuration').value = String(Game.settings.duration);
+      // 列出可用中文語音（依品質排序）
+      var sel = $('setVoice');
+      var saved = store.get('voiceName', '');
+      sel.innerHTML = '<option value="">自動（優先男聲/自然語音）</option>';
+      Voice.listZh().forEach(function (v) {
+        var opt = document.createElement('option');
+        opt.value = v.name;
+        opt.textContent = v.name + '（' + v.lang + '）';
+        if (v.name === saved) opt.selected = true;
+        sel.appendChild(opt);
+      });
       UI.showModal('settingsModal');
     });
     $('btnCloseSettings').addEventListener('click', function () {
@@ -339,6 +350,10 @@
       store.set('rtp', Game.settings.rtp);
       store.set('horses', Game.settings.horses);
       store.set('duration', Game.settings.duration);
+      var vName = $('setVoice').value;
+      store.set('voiceName', vName);
+      Voice.setPreferred(vName);
+      if (vName) Voice.speak('語音測試，祝您旗開得勝！', 1.15); // 立即試聽
       UI.hideModal('settingsModal');
     });
     $('btnResetWallet').addEventListener('click', function () {
@@ -394,6 +409,7 @@
   bindEvents();
   var voiceOn = store.get('voice', true);
   Voice.setEnabled(voiceOn);
+  Voice.setPreferred(store.get('voiceName', '') || null);
   $('btnVoice').textContent = voiceOn ? '🔊' : '🔇';
   // 有未結算的場次（含已下注未開獎）→ 還原同一場；否則開新場次
   var pending = store.get('pending', null);

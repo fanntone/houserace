@@ -6,6 +6,7 @@
                   typeof SpeechSynthesisUtterance !== 'undefined';
   var enabled = true;
   var voice = null;
+  var preferredName = null; // 使用者在設定中指定的語音名稱
 
   // 挑選賽事主播聲線：男聲 > 自然語音（Edge）> 台灣中文 > 任何中文
   function scoreVoice(v) {
@@ -21,12 +22,26 @@
   function pickVoice() {
     if (!supported) return;
     var vs = speechSynthesis.getVoices();
+    if (preferredName) { // 使用者指定優先
+      for (var j = 0; j < vs.length; j++) {
+        if (vs[j].name === preferredName) { voice = vs[j]; return; }
+      }
+    }
     var best = null, bestScore = -1;
     for (var i = 0; i < vs.length; i++) {
       var sc = scoreVoice(vs[i]);
       if (sc > bestScore) { bestScore = sc; best = vs[i]; }
     }
     voice = best;
+  }
+
+  // 可用的中文語音清單（給設定面板）
+  function listZh() {
+    if (!supported) return [];
+    return speechSynthesis.getVoices()
+      .filter(function (v) { return (v.lang || '').toLowerCase().replace('_', '-').indexOf('zh') === 0; })
+      .map(function (v) { return { name: v.name, lang: v.lang, score: scoreVoice(v) }; })
+      .sort(function (a, b) { return b.score - a.score; });
   }
   if (supported) {
     pickVoice();
@@ -35,23 +50,34 @@
 
   var gen = 0; // 世代計數：stop() 後仍在排程中的語音一律作廢
 
-  // rate：1.0 平穩 → 1.3 衝線激動
+  // 主播式播報：把長句切成短爆發句，逐句加速、音調起伏，營造抑揚頓挫
+  // rate：1.0 平穩 → 1.5 衝線激動
   function speak(text, rate) {
     if (!supported || !enabled) return;
     var clean = text.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '').trim();
     if (!clean) return;
+    var base = rate || 1.05;
+    // 以驚嘆號/逗號切句，保留語氣
+    var parts = clean.split(/(?<=[！!])|(?<=[，,])/).map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0; });
+    if (parts.length === 0) parts = [clean];
     var token = ++gen;
     try {
       speechSynthesis.cancel();
       // Chrome 已知問題：cancel 後立刻 speak 可能被吃掉，稍微延遲
       setTimeout(function () {
         if (!enabled || token !== gen) return;
-        var u = new SpeechSynthesisUtterance(clean);
-        u.lang = 'zh-TW';
-        if (voice) u.voice = voice;
-        u.rate = rate || 1.05;
-        u.pitch = 1.08 + Math.min(0.14, Math.max(0, (u.rate - 1) * 0.3)); // 越急促音調越亢奮
-        speechSynthesis.speak(u);
+        for (var i = 0; i < parts.length; i++) {
+          var u = new SpeechSynthesisUtterance(parts[i]);
+          u.lang = 'zh-TW';
+          if (voice) u.voice = voice;
+          var excl = /[！!]$/.test(parts[i]) ? 0.08 : 0;        // 驚嘆句再亢奮一點
+          u.rate = Math.min(1.6, base + i * 0.04 + excl);       // 逐句催速
+          u.pitch = Math.min(1.35,
+            1.06 + Math.max(0, (u.rate - 1) * 0.35) + excl +    // 越快越高亢
+            (Math.random() * 0.06 - 0.03));                     // 微抖動避免機械感
+          speechSynthesis.speak(u);                             // 依序排隊播出
+        }
       }, 30);
     } catch (e) { /* 語音失敗不影響遊戲 */ }
   }
@@ -66,6 +92,9 @@
     speak: speak,
     stop: stop,
     setEnabled: function (on) { enabled = !!on; if (!on) stop(); },
-    isEnabled: function () { return enabled; }
+    isEnabled: function () { return enabled; },
+    listZh: listZh,
+    setPreferred: function (name) { preferredName = name || null; pickVoice(); },
+    currentName: function () { return voice ? voice.name : '(無)'; }
   };
 })(window);

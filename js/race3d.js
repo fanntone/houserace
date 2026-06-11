@@ -11,7 +11,30 @@
   if (typeof THREE === 'undefined' || typeof RaceAnimator === 'undefined') return;
 
   // ---------- 內嵌馬模型（base64 → ArrayBuffer → GLTF） ----------
-  var assets = { gltf: null, normScale: 1, pending: [] };
+  var STRIDE_LEN = 6.2; // 一個完整奔跑週期前進的距離（公尺）；動畫速率 = 地速 ÷ 步幅，杜絕滑步
+  var assets = { gltf: null, normScale: 1, clipDur: 1, pending: [] };
+
+  // 平滑法線：把同位置頂點的法線平均，消除低多邊形稜面（方塊感 → 圓潤）
+  function smoothNormals(geo) {
+    geo.computeVertexNormals();
+    var p = geo.attributes.position, nrm = geo.attributes.normal;
+    var acc = {}, i, k;
+    function key(idx) {
+      return p.getX(idx).toFixed(3) + ',' + p.getY(idx).toFixed(3) + ',' + p.getZ(idx).toFixed(3);
+    }
+    for (i = 0; i < p.count; i++) {
+      k = key(i);
+      var a = acc[k] || (acc[k] = [0, 0, 0]);
+      a[0] += nrm.getX(i); a[1] += nrm.getY(i); a[2] += nrm.getZ(i);
+    }
+    for (i = 0; i < p.count; i++) {
+      var s = acc[key(i)];
+      var len = Math.sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]) || 1;
+      nrm.setXYZ(i, s[0] / len, s[1] / len, s[2] / len);
+    }
+    nrm.needsUpdate = true;
+  }
+
   (function parseHorse() {
     try {
       var bin = atob(HORSE_GLB_BASE64);
@@ -20,12 +43,14 @@
       for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
       new THREE.GLTFLoader().parse(buf, '', function (gltf) {
         var mesh = gltf.scene.children[0];
+        smoothNormals(mesh.geometry);
         var box = new THREE.Box3().setFromObject(mesh);
         var size = box.getSize(new THREE.Vector3());
         assets.normScale = 2.45 / size.y; // 正規化成總高約 2.45m
         // 模型長軸為 Z（面向 +Z），寬度取 X，供號碼布貼合側腹
         assets.halfWidth = Math.min(0.5, (size.x * assets.normScale) / 2 + 0.04);
         assets.backHeight = size.y * assets.normScale * 0.62; // 約馬背高度
+        assets.clipDur = gltf.animations[0].duration || 1;
         assets.gltf = gltf;
         assets.pending.forEach(function (cb) { cb(); });
         assets.pending = [];
@@ -65,13 +90,13 @@
     // 世界座標：公尺。x 沿主直道，z 朝看台側，y 向上。
     this.cx = 0;
     this.cy = 0;
-    this.L = 90;          // 直道半長（全長 180m）
-    this.lane0R = 84;     // 第 1 道端弧半徑
+    this.L = 70;          // 直道半長（全長 140m）
+    this.lane0R = 66;     // 第 1 道端弧半徑
     this.laneGap = 2.0;
-    this.outerR = 90;     // 跑道帶外緣（固定，與馬匹數無關）
-    this.innerR = 56;     // 跑道帶內緣
+    this.outerR = 72;     // 跑道帶外緣（固定，與馬匹數無關）
+    this.innerR = 40;     // 跑道帶內緣
     this.finishX = this.cx + this.L * 0.5;
-    this.P0 = 4 * this.L + 2 * Math.PI * this.lane0R; // ≈ 888m，38 秒 ≈ 23m/s
+    this.P0 = 4 * this.L + 2 * Math.PI * this.lane0R; // ≈ 695m，38 秒 ≈ 18.3m/s（真實馬速）
   };
 
   // 操場形等距取樣（半徑 r、frac 與 lanePoint 同原點），回傳 {x, y(=z)}
@@ -121,6 +146,8 @@
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // 電影級色調，柔化低多邊形的生硬感
+    renderer.toneMappingExposure = 1.05;
 
     var scene = new THREE.Scene();
     scene.background = new THREE.Color(0x8fc3e8);
@@ -184,7 +211,7 @@
         new THREE.MeshLambertMaterial({ color: 0xf2f5f7 })
       );
     }
-    [86.5, 57.5].forEach(function (r) {
+    [68.5, 41.5].forEach(function (r) {
       scene.add(railRing(r, 1.05));
       scene.add(railRing(r, 0.6));
       var P = 4 * self.L + 2 * Math.PI * r;
@@ -372,6 +399,8 @@
     this.scene.add(shared.gateGroup);
     this._horses3d = [];
     this._mixers = [];
+    this._actions = [];
+    this._prevDist = [];
 
     // 大螢幕文字
     var sc = shared.screenCtx;
@@ -467,30 +496,52 @@
         g.add(cloth);
       });
 
-      // 騎師（貼背前傾蹲姿，彩衣同鞍布色）——同樣以 +Z 為前
+      // 騎師（貼背前傾蹲姿，彩衣同鞍布色）——掛在馬背基準點，整組做騎乘律動
       var jk = new THREE.Group();
+      jk.position.set(0, backH, 0);
       var silks = new THREE.MeshLambertMaterial({ color: horse.color.bg });
       var body = new THREE.Mesh(new THREE.CapsuleGeometry(0.15, 0.34, 3, 8), silks);
       body.rotation.x = 1.25; // 壓低貼近馬背
-      body.position.set(0, backH + 0.22, 0.05);
+      body.position.set(0, 0.22, 0.05);
       body.castShadow = true;
       jk.add(body);
       var head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8),
         new THREE.MeshLambertMaterial({ color: 0xe8c39e }));
-      head.position.set(0, backH + 0.38, 0.36);
+      head.position.set(0, 0.38, 0.36);
       jk.add(head);
       var helmet = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 8, 0, Math.PI * 2, 0, 1.7), silks);
-      helmet.position.set(0, backH + 0.42, 0.36);
+      helmet.position.set(0, 0.42, 0.36);
       jk.add(helmet);
       [-0.22, 0.22].forEach(function (sxn) {
         var thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.26, 2, 6),
           new THREE.MeshLambertMaterial({ color: 0xf1f3f5 }));
-        thigh.position.set(sxn, backH - 0.05, 0.12);
+        thigh.position.set(sxn, -0.05, 0.12);
         thigh.rotation.x = 1.1;
         jk.add(thigh);
       });
+      // 左手（拉韁，固定前伸）
+      var armL = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.28, 2, 6), silks);
+      armL.position.set(-0.17, 0.26, 0.28);
+      armL.rotation.x = 1.15;
+      jk.add(armL);
+      // 右手 + 馬鞭（可揮動：以肩為轉軸）
+      var whipArm = new THREE.Group();
+      whipArm.position.set(0.18, 0.32, 0.18); // 肩
+      var armR = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.26, 2, 6), silks);
+      armR.position.set(0, -0.1, 0.1);
+      armR.rotation.x = 0.8;
+      whipArm.add(armR);
+      var whip = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.55, 5),
+        new THREE.MeshLambertMaterial({ color: 0x2b2118 }));
+      whip.position.set(0, -0.18, 0.32);
+      whip.rotation.x = 1.35;
+      whipArm.add(whip);
+      whipArm.rotation.x = -0.4;
+      jk.add(whipArm);
       g.add(jk);
       g.userData.jockey = jk;
+      g.userData.whipArm = whipArm;
+      g.userData.whipT = 0;
 
       shared.horsesGroup.add(g);
       this._horses3d.push(g);
@@ -500,6 +551,7 @@
       action.play();
       action.time = (horse.num * 0.137) % action.getClip().duration; // 步伐錯開
       this._mixers.push(mixer);
+      this._actions.push(action);
     }
   };
 
@@ -576,9 +628,37 @@
       var a = this.lanePoint(k, prog + 0.0015);
       g.position.set(p.x, 0, p.y);
       g.lookAt(a.x, 0, a.y);
+
+      // 腳步貼地：實際地速(m/s) ÷ 步幅長 = 每秒步頻，動畫精準同步不滑步
+      var d = this.distOf(k, time);
+      var v = (dt > 0 && this._prevDist[k] !== undefined) ? (d - this._prevDist[k]) / dt : 0;
+      this._prevDist[k] = d;
       if (this._mixers[k]) {
-        // 動畫速度與地速同步；待機時做小幅踏步；定格(dt=0)時凍結
-        this._mixers[k].update(dt * (moving ? 1.15 : 0.18));
+        var animDt = moving ? dt * Math.max(v, 0) * assets.clipDur / STRIDE_LEN
+                            : dt * 0.12; // 待機小幅踏步；定格(dt=0)凍結
+        this._mixers[k].update(animDt);
+      }
+
+      // 騎師律動：隨步幅起伏前後晃 + 末段隨機揮鞭
+      var ud = g.userData;
+      if (ud && ud.jockey) {
+        var act = this._actions[k];
+        var cyc = act ? (act.time / assets.clipDur) * Math.PI * 2 : 0;
+        var amp = moving ? 1 : 0.15;
+        var baseY = (assets.backHeight || 1.5);
+        ud.jockey.position.y = baseY + Math.sin(cyc) * 0.07 * amp;
+        ud.jockey.position.z = 0.05 * Math.sin(cyc + 0.6) * amp;
+        ud.jockey.rotation.x = 0.08 * Math.sin(cyc + 1.1) * amp;
+        if (moving && prog > 0.55 && ud.whipT <= 0 && Math.random() < dt * 0.5) {
+          ud.whipT = 0.5; // 平均約每 2 秒揮鞭一次，各馬隨機
+        }
+        if (ud.whipT > 0) {
+          ud.whipT -= dt;
+          var wp = 1 - Math.max(ud.whipT, 0) / 0.5;
+          ud.whipArm.rotation.x = -0.5 - Math.sin(wp * Math.PI) * 1.3; // 揚鞭→抽落
+        } else {
+          ud.whipArm.rotation.x = -0.4 + 0.12 * Math.sin(cyc * 2) * amp;
+        }
       }
     }
     if (shared.gateGroup) shared.gateGroup.visible = time <= 0.01 || time < 2.0;

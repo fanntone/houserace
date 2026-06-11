@@ -7,6 +7,7 @@
 
   // ---------- 儲存（localStorage，失敗則僅存在記憶體） ----------
   var store = {
+    disabled: false, // 多分頁衝突時凍結本分頁的寫入
     get: function (k, dflt) {
       try {
         var v = localStorage.getItem('hr_' + k);
@@ -14,6 +15,7 @@
       } catch (e) { return dflt; }
     },
     set: function (k, v) {
+      if (store.disabled) return;
       try { localStorage.setItem('hr_' + k, JSON.stringify(v)); } catch (e) {}
     }
   };
@@ -57,10 +59,37 @@
   function renderOdds() {
     UI.renderOddsArea($('oddsArea'), Game.round, Game.betType, selectOutcome);
     $('typeHint').textContent = Betting.BET_TYPES[Game.betType].label + '：' + Betting.BET_TYPES[Game.betType].desc;
+    // 不足 7 匹時位置只算前二名，分頁直接標明，避免誤會
+    var placeTab = $('betTabs').querySelector('[data-type="place"]');
+    if (placeTab) placeTab.textContent = (Game.round.market.placeCount === 2) ? '位置(前二)' : '位置';
   }
 
   function renderBets() {
     UI.renderBetList($('betList'), Game.bets, Game.phase === 'betting', removeBet);
+  }
+
+  // ---------- 場次持久化（修復：重載頁面後注金已扣但注單消失） ----------
+  // 未結算的場次（種子+參數+注單）隨時寫入儲存；結算時清除。
+  // 重載時用同一種子重建同一場比賽（種子確定性保證馬匹/賠率/賽果完全一致）。
+  function savePending() {
+    store.set('pending', {
+      seed: Game.round.seed,
+      no: Game.round.no,
+      rtp: Game.round.rtp,
+      n: Game.round.horses.length,
+      bets: Game.bets
+    });
+  }
+
+  function validBets(raw, n) {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(function (b) {
+      return b && Betting.BET_TYPES[b.type] &&
+        Array.isArray(b.sel) && b.sel.length === Betting.BET_TYPES[b.type].picks &&
+        b.sel.every(function (x) { return x >= 1 && x <= n && x === Math.floor(x); }) &&
+        typeof b.amount === 'number' && b.amount >= 10 &&
+        typeof b.odds === 'number' && b.odds > 1;
+    });
   }
 
   // ---------- 場次 ----------
@@ -72,8 +101,28 @@
     var seed = RNG.randomSeedHex();
     var round = Model.buildRound(seed, Game.settings.horses, Game.settings.rtp);
     round.no = Game.roundCounter;
-    Game.round = round;
     Game.bets = [];
+    beginRound(round);
+    savePending();
+  }
+
+  // 還原上次未結算的場次（同種子 → 同一場比賽，注單原封還原）
+  function resumeRound(p) {
+    Voice.stop();
+    var round = Model.buildRound(p.seed, p.n, p.rtp);
+    round.no = p.no;
+    Game.roundCounter = p.no;
+    store.set('round', p.no);
+    Game.bets = validBets(p.bets, p.n);
+    beginRound(round);
+    if (Game.bets.length > 0) {
+      $('commentary').textContent = '📣 已還原上一場未完成的場次與您的 ' +
+        Game.bets.length + ' 筆注單（賽果雜湊不變，可驗證）。';
+    }
+  }
+
+  function beginRound(round) {
+    Game.round = round;
     Game.sel = null;
     Game.amount = 0;
 
@@ -176,6 +225,7 @@
     Game.bets.push(bet);
     Game.balance -= bet.amount;
     store.set('balance', Game.balance);
+    savePending(); // 注單與扣款一起持久化
     updateBalance();
     renderBets();
     hideTicket();
@@ -186,6 +236,7 @@
     var bet = Game.bets.splice(i, 1)[0];
     Game.balance += bet.amount;
     store.set('balance', Game.balance);
+    savePending();
     updateBalance();
     renderBets();
   }
@@ -213,6 +264,7 @@
     var res = Betting.settle(Game.bets, finishNums, round.market.placeCount);
     Game.balance += res.totalPayout;
     store.set('balance', Game.balance);
+    store.set('pending', null); // 場次已結算，清除還原點
     Game.lastRound = round;
 
     setPhase('result');
@@ -293,6 +345,7 @@
       if (!confirm('確定重置錢包回 10,000 點？')) return;
       // 退掉本場已下注金額，避免結算時憑空多派彩
       Game.bets = [];
+      savePending();
       renderBets();
       Game.balance = 10000;
       store.set('balance', Game.balance);
@@ -317,12 +370,43 @@
     });
   }
 
+  // ---------- 多分頁防護 ----------
+  // storage 事件只會由「其他分頁」的寫入觸發：偵測到即凍結本分頁，
+  // 避免兩個分頁互相覆寫注單與餘額（單機網頁多人「同時玩」唯一的衝突來源）。
+  window.addEventListener('storage', function (e) {
+    if (!e.key || e.key.indexOf('hr_') !== 0 || Game.conflictShown) return;
+    Game.conflictShown = true;
+    store.disabled = true;
+    if (Game.countdownTimer) clearInterval(Game.countdownTimer);
+    if (Game.animator) Game.animator.stop();
+    Voice.stop();
+    var d = document.createElement('div');
+    d.className = 'modal';
+    d.innerHTML = '<div class="modal-box"><h2>⚠ 偵測到多個分頁</h2>' +
+      '<p>本遊戲已在另一個分頁／視窗進行中。為避免注單與餘額互相覆寫，本分頁已暫停且不再存檔。</p>' +
+      '<p>請只用一個分頁遊玩。</p>' +
+      '<div class="modal-actions"><button class="primary" id="btnReloadTab">重新載入本分頁</button></div></div>';
+    document.body.appendChild(d);
+    d.querySelector('#btnReloadTab').addEventListener('click', function () { location.reload(); });
+  });
+
   // ---------- 啟動 ----------
   bindEvents();
   var voiceOn = store.get('voice', true);
   Voice.setEnabled(voiceOn);
   $('btnVoice').textContent = voiceOn ? '🔊' : '🔇';
-  newRound();
+  // 有未結算的場次（含已下注未開獎）→ 還原同一場；否則開新場次
+  var pending = store.get('pending', null);
+  if (pending && pending.seed && typeof pending.no === 'number') {
+    try {
+      resumeRound(pending);
+    } catch (e) {
+      console.warn('場次還原失敗，開新場次：', e);
+      newRound();
+    }
+  } else {
+    newRound();
+  }
   if (!store.get('helpSeen', false)) {
     UI.showModal('helpModal');
     store.set('helpSeen', true);

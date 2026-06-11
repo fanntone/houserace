@@ -387,10 +387,14 @@
     shared.screenTex.needsUpdate = true;
 
     if (assets.gltf) this._buildHorses();
-    else assets.pending.push(function () {
-      self._buildHorses();
-      if (!self.running) self.drawFrame(self.raceTime || 0);
-    });
+    else {
+      var myGroup = shared.horsesGroup; // 防止舊場次的延遲回呼把舊馬加進新場景
+      assets.pending.push(function () {
+        if (shared.horsesGroup !== myGroup) return;
+        self._buildHorses();
+        if (!self.running) self.drawFrame(self.raceTime || 0);
+      });
+    }
   };
 
   RaceAnimator3D.prototype._buildGate = function () {

@@ -369,6 +369,8 @@
     this.innerR = 40;     // 跑道帶內緣
     this.finishX = this.cx + this.L * 0.5;
     this.P0 = 4 * this.L + 2 * Math.PI * this.lane0R; // ≈ 695m，38 秒 ≈ 18.3m/s（真實馬速）
+    // 賽道物理內欄（以側位單位表示）：搶賽道的目標是貼著真欄杆，不是最內閘道
+    this.maxLat = (this.lane0R - (this.innerR + 2.2)) / this.laneGap; // ≈ 11.9
   };
 
   // 操場形等距取樣（半徑 r、frac 與 lanePoint 同原點），回傳 {x, y(=z)}
@@ -568,7 +570,8 @@
       leg.position.set(lx, -7, 0);
       screenMesh.add(leg);
     });
-    screenMesh.position.set(this.finishX - 14, 10, this.innerR - 10);
+    // 內場機位車沿半徑約 28m 的環帶移動，塔要退到更深的內場避免入鏡碰撞
+    screenMesh.position.set(this.finishX - 14, 10, this.innerR - 22);
     screenMesh.lookAt(this.finishX + 10, 2, this.lane0R + 26);
     towerG.castShadow = true;
     scene.add(towerG);
@@ -605,8 +608,8 @@
       var pp = self.ovalXY(self.outerR + 10 + (ti * 37 % 26), fr);
       tree(pp.x, pp.y, 0.9 + (ti * 29 % 10) / 10);
     }
-    for (var tj = 0; tj < 10; tj++) { // 內場
-      var pq = self.ovalXY(self.innerR - 12 - (tj * 17 % 18), 0.18 + tj * 0.07);
+    for (var tj = 0; tj < 10; tj++) { // 內場（種深一點，避開內場機位車的環帶）
+      var pq = self.ovalXY(Math.max(6, self.innerR - 24 - (tj * 17 % 12)), 0.18 + tj * 0.07);
       tree(pq.x, pq.y, 0.8 + (tj % 3) * 0.2);
     }
 
@@ -1026,9 +1029,9 @@
     if (time <= 0) {
       shot = 'gate';
       var low = this._racerType === 'cat'; // 貓視角放低，貼著小傢伙們的臉
-      var gp = this.pathPt(11, low ? 7 : 9);       // 閘門斜前方近距
+      var gp = this.pathPt(11, -28);               // 內場斜前方看閘門（轉播機位）
       var gl = this.lanePoint((n - 1) / 2, 0);
-      posT.set(gp.x, low ? 1.6 : 2.6, gp.z);
+      posT.set(gp.x, low ? 1.7 : 2.7, gp.z);
       lookT.set(gl.x + 1.2, low ? 0.8 : 1.4, gl.y);
     } else {
       var ranking = this.rankingAt(time);
@@ -1051,15 +1054,15 @@
         posT.set(pw.x + Math.cos(ang) * 10, 3.4, pw.y + Math.sin(ang) * 10);
         lookT.set(pw.x, 1.5, pw.y);
       } else if (leadD > this.P0 - 115) {
-        shot = 'finish'; // 終點固定機位：馬群迎面衝來壓線
-        var fp = this.pathPt(this.P0 + 16, 13);
+        shot = 'finish'; // 終點固定機位（內場）：馬群迎面衝來壓線
+        var fp = this.pathPt(this.P0 + 16, -32);
         var fl = this.lanePoint((n - 1) / 2, 1.0); // 終點線中心
-        posT.set(fp.x, 4.6, fp.z);
+        posT.set(fp.x, 5.0, fp.z);
         lookT.set(fl.x * 0.45 + cxp * 0.55, 1.6, fl.y * 0.45 + czp * 0.55);
       } else {
-        shot = 'follow'; // 前導跟拍車：鏡頭在集團前方回頭拍，迎面看得到臉
-        var cp = this.pathPt(wd + 13, 14);
-        posT.set(cp.x, 4.6, cp.z);
+        shot = 'follow'; // 內場前導跟拍車：從內側斜前方回頭拍（真實轉播構圖，看台為背景）
+        var cp = this.pathPt(wd + 13, -38);
+        posT.set(cp.x, 4.8, cp.z);
         lookT.set(cxp, 1.3, czp);
       }
     }
@@ -1083,7 +1086,7 @@
   // 避免無理由的瞬間平移。末段被困的強馬做一次性「外抽」決定後堅持到底。
   RaceAnimator3D.prototype._updateLats = function (time, dt) {
     var n = this.horses.length;
-    var rail = n - 1; // 最內側
+    var rail = this.maxLat; // 物理內欄（貼真欄杆，不是最內閘道）——搶賽道的目標
     if (time <= 0) { // 閘內：固定閘位（1 號最內）
       for (var iz = 0; iz < n; iz++) this._lat[iz] = n - 1 - iz;
       this._slot = null;
@@ -1115,7 +1118,7 @@
         }
         var want = this._swing[i] && s < 1.05
           ? Math.min(cur, rail - 2.4)
-          : Math.min(rail, cur + 0.9); // 試著往內切一個身位（省地）
+          : Math.min(rail, cur + 1.2); // 見空就往內切（搶賽道、省地）
         var lat = want, guard = 0, moved = true;
         while (moved && guard++ <= n + 3) { // 位置被佔 → 往外讓
           moved = false;
@@ -1133,9 +1136,10 @@
       }
       taken.push({ prog: prog, lat: this._slot[i] });
     }
-    // 出閘成形期：從閘位平滑帶入；側移限速（中段 0.55 道/秒、末段 1.2 道/秒）
+    // 出閘成形期：從閘位平滑帶入；側移限速
+    //（前段 1.5 道/秒＝出閘搶內側的斜切、中段 0.6 穩定、末段 1.2 超車走位）
     var form = Math.min(1, Math.max(0, (s - 0.02) / 0.14));
-    var rate = (s > 0.7 ? 1.2 : 0.55) * dt;
+    var rate = (s < 0.22 ? 1.5 : (s > 0.7 ? 1.2 : 0.6)) * dt;
     for (var m = 0; m < n; m++) {
       var tgt = (n - 1 - m) * (1 - form) + this._slot[m] * form;
       var dlt = tgt - this._lat[m];

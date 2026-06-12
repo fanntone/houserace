@@ -92,11 +92,15 @@
   function hostOnData(conn, msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.t === 'hello') {
+      // 冪等：客人同步重試會重發 hello，不重複加人、但會重發場次快照
       conn._name = String(msg.name || '玩家').slice(0, 12) || '玩家';
       if (Net.conns.indexOf(conn) === -1) Net.conns.push(conn);
-      Net.players.push({ id: conn.peer, name: conn._name, betCount: 0, betTotal: 0 });
+      var existing = findPlayer(conn.peer);
+      var isNew = !existing;
+      if (existing) existing.name = conn._name;
+      else Net.players.push({ id: conn.peer, name: conn._name, betCount: 0, betTotal: 0 });
       Net.pushPlayers();
-      if (Net.cb.onJoined) Net.cb.onJoined(conn._name, conn);
+      if (Net.cb.onJoined) Net.cb.onJoined(conn._name, conn, isNew);
     } else if (msg.t === 'bet' && msg.bet) {
       var p = findPlayer(conn.peer);
       if (p) {
@@ -109,6 +113,8 @@
       if (Net.cb.onBetFeed) Net.cb.onBetFeed(feed.who, msg.bet);
     } else if (msg.t === 'nonce') {
       if (Net.cb.onNonce) Net.cb.onNonce(conn.peer, String(msg.v || '').slice(0, 64));
+    } else if (msg.t === 'pong') {
+      conn._seen = Date.now();
     }
   }
 
@@ -164,6 +170,11 @@
   function guestOnData(msg) {
     if (!msg || typeof msg !== 'object') return;
     var cb = Net.cb;
+    if (msg.t === 'ping') { // 房主心跳：回 pong 並記錄存活時刻
+      Net.lastPing = Date.now();
+      Net.broadcast({ t: 'pong' });
+      return;
+    }
     if (msg.t === 'players') { Net.players = msg.list || []; if (cb.onPlayers) cb.onPlayers(Net.players); }
     else if (msg.t === 'round' && cb.onRound) cb.onRound(msg);
     else if (msg.t === 'betfeed' && cb.onBetFeed) cb.onBetFeed(msg.who, msg.bet);
@@ -192,6 +203,29 @@
   Net.sendNonce = function (v) {
     if (Net.mode === 'guest') Net.broadcast({ t: 'nonce', v: v });
   };
+
+  // 客人：同步重試（場次快照沒送到時重新請求；房主端冪等）
+  Net.resendHello = function () {
+    if (Net.mode === 'guest') {
+      Net.broadcast({ t: 'hello', name: Net.myName, ver: global.APP_BUILD || '' });
+    }
+  };
+
+  // 房主：廣播心跳並清理失聯的客人（瀏覽器被直接關掉不會有乾淨的 close）
+  Net.heartbeat = function (timeoutMs) {
+    if (Net.mode !== 'host') return;
+    Net.broadcast({ t: 'ping' });
+    var now = Date.now();
+    for (var i = Net.conns.length - 1; i >= 0; i--) {
+      var c = Net.conns[i];
+      if (c._seen === undefined) c._seen = now; // 首次心跳起算
+      if (now - c._seen > timeoutMs) {
+        try { c.close(); } catch (e) {}
+        hostDropConn(c);
+      }
+    }
+  };
+  Net.lastPing = 0;
 
   Net.active = function () { return Net.mode !== null; };
   Net.isHost = function () { return Net.mode === 'host'; };

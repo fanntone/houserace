@@ -191,24 +191,10 @@
 
     $('countdownOverlay').classList.remove('hidden');
     $('speedCtrl').classList.add('hidden');
+    // 倒數採 wall-clock 截止制（背景分頁計時器被節流也照樣準時觸發）
     Game.countdown = BETTING_SECONDS;
+    Game.countdownEndsAt = Date.now() + BETTING_SECONDS * 1000;
     $('countdown').textContent = Game.countdown;
-    if (Game.countdownTimer) clearInterval(Game.countdownTimer);
-    Game.countdownTimer = setInterval(function () {
-      if (!Game.mp.active && UI.anyModalOpen()) return; // 單機看說明時暫停；多人不暫停（全房同步）
-      Game.countdown--;
-      $('countdown').textContent = Math.max(0, Game.countdown);
-      if (Game.countdown <= 0) {
-        if (Game.mp.active && !Game.mp.host) { // 客人：等房主鎖注訊息
-          clearInterval(Game.countdownTimer);
-          $('countdown').textContent = '0';
-        } else if (Game.mp.active && Game.mp.host) {
-          mpLock();
-        } else {
-          startRace();
-        }
-      }
-    }, 1000);
   }
 
   // ---------- 下注 ----------
@@ -270,8 +256,7 @@
   // ---------- 比賽與結算 ----------
   function startRace() {
     if (Game.phase !== 'betting') return;
-    clearInterval(Game.countdownTimer);
-    Game.countdownTimer = null;
+    Game.countdownEndsAt = null;
     setPhase('racing');
     hideTicket();
     renderBets();
@@ -296,11 +281,16 @@
     // 多人：記錄多方公平資料；房主揭示種子讓全房驗證
     if (Game.mp.active) {
       round.mpData = {
-        hostSeed: Game.mp.host ? Game.mp.hostSeed : null, // 客人等 reveal 訊息補上
+        hostSeed: Game.mp.host ? Game.mp.hostSeed : (Game.mp.pendingReveal || null),
         nonces: Game.mp.nonces || [],
         nonceOk: Game.mp.nonceOk
       };
       if (Game.mp.host) Net.broadcast({ t: 'reveal', hostSeed: Game.mp.hostSeed });
+    }
+    // 機台式持續循環：結果顯示 10 秒後自動開下一場（房主與單機；客人由房主廣播帶動）
+    if (!Game.mp.active || Game.mp.host) {
+      Game.autoNextAt = Date.now() + 10500;
+      Game.autoNextRemain = null;
     }
 
     setPhase('result');
@@ -402,7 +392,7 @@
   // 房主：下注截止 → 收集全員隨機數 → 廣播開跑
   function mpLock() {
     if (Game.phase !== 'betting' || !Game.mp.host) return;
-    clearInterval(Game.countdownTimer);
+    Game.countdownEndsAt = null;
     setPhase('racing');
     hideTicket();
     renderBets();
@@ -410,12 +400,7 @@
     Net.broadcast({ t: 'lock' });
     $('commentary').textContent = '📣 下注截止！收集全員隨機數，產生賽果…';
     Game.mp.nonces = [RNG.randomSeedHex().slice(0, 16)]; // 房主自己的隨機數
-    setTimeout(function () {
-      if (!Game.mp.active || !Game.mp.host) return;
-      var order = Model.finishFromSeeds(Game.mp.hostSeed, Game.mp.nonces, Game.round.horses);
-      Net.broadcast({ t: 'start', order: order, nonces: Game.mp.nonces });
-      mpStartRace(order);
-    }, 1500);
+    Game.mp.startAt = Date.now() + 1500; // 收隨機數窗口（節拍器到點廣播開跑，背景也準時）
   }
 
   // 全員：拿到名次後重建動畫器並開跑
@@ -436,6 +421,18 @@
 
   // 客人：套用房主廣播的場次
   function mpApplyRound(msg) {
+    // 同步重試可能重複收到同一場：已同步且場次號相同就忽略（避免清掉已下的注單）
+    if (Game.mp.synced && Game.round && msg.no === Game.round.no) return;
+    Game.mp.synced = true;
+    if (Game.mp.syncTimer) { clearInterval(Game.mp.syncTimer); Game.mp.syncTimer = null; }
+    // 若上一場動畫還沒跑完（例如剛從背景回來），先瞬間結算再進新場，注金不蒸發
+    if (Game.phase === 'racing' && Game.animator && Game.animator.running) {
+      Game.muteCommentary = true;
+      Game.animator.skip();
+      Game.muteCommentary = false;
+    }
+    Game.autoNextAt = null;
+    Game.mp.pendingReveal = null;
     Voice.stop();
     UI.hideModal('resultModal');
     var horses = Model.reviveHorses(msg.horses || []);
@@ -457,7 +454,7 @@
     beginRound(round);
     if (msg.phase !== 'betting') { // 中途加入：本場觀望，等下一場
       Game.mp.waiting = true;
-      clearInterval(Game.countdownTimer);
+      Game.countdownEndsAt = null;
       $('countdownOverlay').classList.add('hidden');
       setPhase('result');
       $('commentary').textContent = '📣 本場已開跑，請稍候——下一場開始即可下注！';
@@ -471,9 +468,9 @@
   function mpCallbacks() {
     return {
       // —— 房主側 ——
-      onJoined: function (name, conn) {
-        Net.sendTo(conn, mpRoundMsg(conn));
-        mpFeedLine('🙌 <b>' + name + '</b> 加入了房間');
+      onJoined: function (name, conn, isNew) {
+        Net.sendTo(conn, mpRoundMsg(conn)); // 同步重試也會重發場次快照（冪等）
+        if (isNew) mpFeedLine('🙌 <b>' + name + '</b> 加入了房間');
         mpUpdateUI();
       },
       onNonce: function (id, v) {
@@ -489,7 +486,7 @@
       onRound: mpApplyRound,
       onLock: function () {
         if (Game.mp.waiting) return;
-        clearInterval(Game.countdownTimer);
+        Game.countdownEndsAt = null;
         setPhase('racing');
         hideTicket();
         renderBets();
@@ -505,7 +502,9 @@
         mpStartRace(msg.order || []);
       },
       onReveal: function (msg) {
-        if (Game.lastRound && Game.lastRound.mpData) {
+        // 可能比本地結算先到（動畫進度不同步），先暫存
+        Game.mp.pendingReveal = msg.hostSeed;
+        if (Game.lastRound && Game.lastRound.mpData && !Game.lastRound.mpData.hostSeed) {
           Game.lastRound.mpData.hostSeed = msg.hostSeed;
           if (!document.getElementById('resultModal').classList.contains('hidden')) {
             $('resultSeed').textContent = msg.hostSeed;
@@ -518,7 +517,7 @@
     };
   }
 
-  // 進房前收拾單機狀態：退還未結算注金、清掉斷線還原點
+  // 進房前收拾單機狀態：退還未結算注金、清掉斷線還原點與各種截止時刻
   function mpPrep() {
     if (Game.phase !== 'result' && Game.bets.length) {
       var refund = 0;
@@ -528,7 +527,9 @@
     }
     Game.bets = [];
     store.set('pending', null);
-    if (Game.countdownTimer) clearInterval(Game.countdownTimer);
+    Game.countdownEndsAt = null;
+    Game.autoNextAt = null;
+    if (Game.mp.syncTimer) { clearInterval(Game.mp.syncTimer); Game.mp.syncTimer = null; }
     if (Game.animator) Game.animator.stop();
     Voice.stop();
     $('mpFeed').innerHTML = '';
@@ -564,9 +565,22 @@
       Game.mp.active = true;
       Game.mp.host = false;
       Game.mp.code = Net.code;
+      Game.mp.synced = false;
+      Net.lastPing = Date.now(); // 心跳寬限起點
       mpUpdateUI();
       UI.hideModal('mpModal');
       $('commentary').textContent = '📣 已加入房間，同步場次中…';
+      // 同步看門狗：場次快照偶發遺失時自動重新請求（房主端冪等）
+      if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
+      Game.mp.syncTimer = setInterval(function () {
+        if (!Game.mp.active || Game.mp.synced) {
+          clearInterval(Game.mp.syncTimer);
+          Game.mp.syncTimer = null;
+          return;
+        }
+        Net.resendHello();
+        $('commentary').textContent = '📣 同步場次中…（重試）';
+      }, 2500);
     }, function (err) {
       alert(err.message);
       leaveMP(null);
@@ -582,8 +596,11 @@
       store.set('balance', Game.balance);
     }
     Game.bets = [];
+    if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
     Game.mp = { active: false, host: false, code: '', racer: null, hostSeed: null,
-                nonces: null, myNonce: null, nonceOk: true, waiting: false };
+                nonces: null, myNonce: null, nonceOk: true, waiting: false,
+                synced: false, syncTimer: null, startAt: null, pendingReveal: null };
+    Game.autoNextAt = null;
     mpUpdateUI();
     UI.hideModal('resultModal');
     newRound();
@@ -625,6 +642,7 @@
     });
 
     $('btnNextRound').addEventListener('click', function () {
+      Game.autoNextAt = null; // 手動進場：取消自動循環倒數
       UI.hideModal('resultModal');
       if (Game.mp.active) {
         if (Game.mp.host) mpNewRound(); // 客人按鈕已停用，等房主廣播
@@ -726,6 +744,96 @@
     });
   }
 
+  // ---------- 背景節拍器與截止時刻 ----------
+  // Web Worker 計時不受背景分頁節流：背景時驅動比賽推進、倒數鎖注、自動下一場，
+  // 避免房主切到別的視窗後全房卡住（rAF 在背景完全停擺）。
+  function checkDeadlines() {
+    if (Game.conflictShown) return;
+    var now = Date.now();
+    // 下注倒數
+    if (Game.phase === 'betting' && Game.countdownEndsAt) {
+      if (!Game.mp.active && UI.anyModalOpen()) {
+        Game.countdownEndsAt += now - (Game._lastDl || now); // 單機看面板：順延
+      } else {
+        var remain = Math.ceil((Game.countdownEndsAt - now) / 1000);
+        if (remain !== Game.countdown) {
+          Game.countdown = Math.max(0, remain);
+          $('countdown').textContent = Game.countdown;
+        }
+        if (remain <= 0) {
+          Game.countdownEndsAt = null;
+          if (Game.mp.active && Game.mp.host) mpLock();
+          else if (!Game.mp.active) startRace();
+          // 多人客人：顯示 0，等房主的鎖注訊息
+        }
+      }
+    }
+    // 房主：鎖注後收隨機數的窗口到期 → 廣播開跑
+    if (Game.mp.startAt && Game.mp.active && Game.mp.host && now >= Game.mp.startAt) {
+      Game.mp.startAt = null;
+      var order = Model.finishFromSeeds(Game.mp.hostSeed, Game.mp.nonces, Game.round.horses);
+      Net.broadcast({ t: 'start', order: order, nonces: Game.mp.nonces });
+      mpStartRace(order);
+    }
+    // 機台式持續循環：結果顯示後自動開下一場（房主/單機）
+    if (Game.autoNextAt && Game.phase === 'result' && (!Game.mp.active || Game.mp.host)) {
+      var busy = false;
+      ['verifyModal', 'settingsModal', 'helpModal', 'mpModal'].forEach(function (id) {
+        if (!document.getElementById(id).classList.contains('hidden')) busy = true;
+      });
+      if (busy) {
+        Game.autoNextAt += now - (Game._lastDl || now); // 玩家在看面板：順延
+      } else {
+        var r2 = Math.ceil((Game.autoNextAt - now) / 1000);
+        if (r2 !== Game.autoNextRemain) {
+          Game.autoNextRemain = r2;
+          var nb = $('btnNextRound');
+          if (r2 > 0) {
+            nb.textContent = '下一場 ▶（' + r2 + ' 秒後自動）';
+          }
+        }
+        if (r2 <= 0) {
+          Game.autoNextAt = null;
+          UI.hideModal('resultModal');
+          if (Game.mp.active && Game.mp.host) mpNewRound();
+          else if (!Game.mp.active) newRound();
+        }
+      }
+    }
+    // 心跳：房主每 2 秒廣播並清理失聯客人；客人 8 秒沒心跳 → 判定房主離線
+    if (Game.mp.active) {
+      if (Game.mp.host) {
+        if (!Game._lastPingOut || now - Game._lastPingOut >= 2000) {
+          Game._lastPingOut = now;
+          Net.heartbeat(10000);
+        }
+      } else if (Net.lastPing && now - Net.lastPing > 8000) {
+        leaveMP('📣 房主失去連線，已退還未結算注金並切回單機模式。');
+      }
+    }
+    Game._lastDl = now;
+  }
+
+  var ticker = null;
+  try {
+    var tickBlob = new Blob(['setInterval(function(){postMessage(1)},250);'], { type: 'text/javascript' });
+    ticker = new Worker(URL.createObjectURL(tickBlob));
+    var lastTickWall = Date.now();
+    ticker.onmessage = function () {
+      var now = Date.now();
+      var dt = (now - lastTickWall) / 1000;
+      lastTickWall = now;
+      // 背景時 rAF 停擺：由節拍器推進比賽（含 321 倒數開閘、定格、完賽結算）
+      if (document.hidden && Game.animator && Game.animator.running && Game.animator.advance) {
+        Game.animator.advance(dt);
+      }
+      checkDeadlines();
+    };
+  } catch (e) {
+    console.warn('Worker 節拍器不可用，退回前景計時', e);
+  }
+  setInterval(checkDeadlines, 500); // 前景備援（Worker 不可用時仍能運作）
+
   // ---------- 響應式賽事畫布 ----------
   // 手機直版時改用近正方形比例，賽事畫面占滿螢幕寬（桌面維持寬螢幕轉播比例）
   function fitTrackCanvas() {
@@ -750,7 +858,9 @@
     if (!e.key || e.key.indexOf('hr_') !== 0 || Game.conflictShown) return;
     Game.conflictShown = true;
     store.disabled = true;
-    if (Game.countdownTimer) clearInterval(Game.countdownTimer);
+    Game.countdownEndsAt = null;
+    Game.autoNextAt = null;
+    if (Game.mp.active) Net.leave(); // 衝突分頁若在房間中先退出，避免殭屍連線
     if (Game.animator) Game.animator.stop();
     Voice.stop();
     var d = document.createElement('div');

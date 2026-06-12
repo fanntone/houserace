@@ -319,7 +319,7 @@
 
   // —— 借用 2D 類別的共用數學與主迴圈（drawFrame/_finish/stop 由本類別實作） ——
   ['progressOf', 'distOf', 'rankingAt', 'lanePoint', '_checkMilestones', '_label',
-   '_W', 'start', 'skip', 'setSpeed', 'drawIdle'].forEach(function (m) {
+   '_W', 'start', 'skip', 'setSpeed', 'drawIdle', '_step', 'advance'].forEach(function (m) {
     RaceAnimator3D.prototype[m] = RaceAnimator.prototype[m];
   });
 

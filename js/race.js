@@ -829,36 +829,48 @@
       if (last === null) last = now;
       var dt = Math.min((now - last) / 1000, 0.1);
       last = now;
-      self._flash = Math.max(0, self._flash - dt * 2.2);
-      self._goFlash = Math.max(0, (self._goFlash || 0) - dt);
-      if (self._gateHold > 0) {
-        self._gateHold -= dt; // 停閘：鏡頭停在閘口，3-2-1 倒數
-        if (self._gateHold <= 0) self._goFlash = 0.9; // 出閘瞬間
-      } else if (self._freeze > 0) {
-        self._freeze -= dt; // 壓線定格：時間暫停，畫面停在過線瞬間
-      } else {
-        // 相片裁判等級的貼身賽：衝線前後切慢動作
-        var slow = self.photoFinish &&
-          self.raceTime > self.T[self.finishOrder[0]] - 0.9 &&
-          self.raceTime < self.T[self.finishOrder[1]] + 0.2;
-        self._slowmo = slow;
-        self.raceTime += dt * self.speed * (slow ? 0.35 : 1);
-        if (!self._crossed && self.raceTime >= self.T[self.finishOrder[0]]) {
-          self._crossed = true;
-          self._freeze = self.photoFinish ? 1.15 : 0.7;
-          self._flash = 1;
-        }
-      }
-      self._checkMilestones();
-      self.drawFrame(self.raceTime);
-      if (self.opts.onTick) self.opts.onTick(self.raceTime, self.rankingAt(self.raceTime));
-      if (self.raceTime >= self.endTime) {
-        self._finish();
-        return;
-      }
+      if (self._step(dt)) return; // 已完賽
       self._raf = requestAnimationFrame(loop);
     }
     this._raf = requestAnimationFrame(loop);
+  };
+
+  // 單步推進（rAF 與背景節拍器共用）。回傳 true 表示本步完賽。
+  RaceAnimator.prototype._step = function (dt) {
+    this._flash = Math.max(0, this._flash - dt * 2.2);
+    this._goFlash = Math.max(0, (this._goFlash || 0) - dt);
+    if (this._gateHold > 0) {
+      this._gateHold -= dt; // 停閘：鏡頭停在閘口，3-2-1 倒數
+      if (this._gateHold <= 0) this._goFlash = 0.9; // 出閘瞬間
+    } else if (this._freeze > 0) {
+      this._freeze -= dt; // 壓線定格：時間暫停，畫面停在過線瞬間
+    } else {
+      // 相片裁判等級的貼身賽：衝線前後切慢動作
+      var slow = this.photoFinish &&
+        this.raceTime > this.T[this.finishOrder[0]] - 0.9 &&
+        this.raceTime < this.T[this.finishOrder[1]] + 0.2;
+      this._slowmo = slow;
+      this.raceTime += dt * this.speed * (slow ? 0.35 : 1);
+      if (!this._crossed && this.raceTime >= this.T[this.finishOrder[0]]) {
+        this._crossed = true;
+        this._freeze = this.photoFinish ? 1.15 : 0.7;
+        this._flash = 1;
+      }
+    }
+    this._checkMilestones();
+    this.drawFrame(this.raceTime);
+    if (this.opts.onTick) this.opts.onTick(this.raceTime, this.rankingAt(this.raceTime));
+    if (this.raceTime >= this.endTime) {
+      this._finish();
+      return true;
+    }
+    return false;
+  };
+
+  // 背景分頁時 rAF 停擺，由外部節拍器（Web Worker）驅動，避免房主掛網拖累全房
+  RaceAnimator.prototype.advance = function (dt) {
+    if (!this.running) return;
+    this._step(Math.min(Math.max(dt, 0), 0.6));
   };
 
   RaceAnimator.prototype._checkMilestones = function () {

@@ -229,6 +229,7 @@
     else if (msg.t === 'start' && cb.onStart) cb.onStart(msg);
     else if (msg.t === 'reveal' && cb.onReveal) cb.onReveal(msg);
     else if (msg.t === 'resultfeed' && cb.onResultFeed) cb.onResultFeed(msg.who, msg.bet | 0, msg.win | 0);
+    else if (msg.t === 'standings' && cb.onStandings) cb.onStandings(msg.list || []);
   }
 
   // ---------- 共用 ----------

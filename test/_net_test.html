@@ -147,6 +147,10 @@ NetHost.host('測試房主', {
     },
     onResultFeed: function (who, bet, win) {
       ok('戰績互報：收到自己的本場結果回播', who === '小貓' && bet === 100 && win === 450);
+      NetHost.broadcast({ t: 'standings', list: [{ who: '小貓', bet: 100, win: 450, rounds: 1 }] });
+    },
+    onStandings: function (list) {
+      ok('累計排行：收到房主廣播', list.length === 1 && list[0].who === '小貓' && list[0].win === 450);
       testReconnect();
     },
     onLeft: function () {

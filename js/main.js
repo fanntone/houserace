@@ -353,25 +353,72 @@
     while (feed.children.length > 8) feed.removeChild(feed.lastChild);
   }
 
-  // 全房戰績表（結果面板）：各家本場下注/派彩/淨額，贏家排前
+  // 房主：把累計 stats 整理成排行榜（淨額高者在前）
+  function mpStandingsList() {
+    var stats = Game.mp.stats || {};
+    return Object.keys(stats).map(function (k) {
+      var s = stats[k];
+      return { who: k, bet: s.bet, win: s.win, rounds: s.rounds };
+    }).sort(function (a, b) { return (b.win - b.bet) - (a.win - a.bet); });
+  }
+
+  // 房主：戰績陸續到達時合併廣播一次（debounce），並持久化（重載重開房可還原今晚累計）
+  function mpBroadcastStandings() {
+    if (Game.mp._standTimer) return;
+    Game.mp._standTimer = setTimeout(function () {
+      Game.mp._standTimer = null;
+      if (!Game.mp.active || !Game.mp.host) return;
+      Game.mp.standings = mpStandingsList();
+      Net.broadcast({ t: 'standings', list: Game.mp.standings });
+      store.set('mpstats', { code: Game.mp.code, t: Date.now(), stats: Game.mp.stats });
+      renderMpResults();
+    }, 250);
+  }
+
+  // 全房戰績表（結果面板）：本場各家下注/派彩/淨額 + 跨場累計排行（依累計排序）
   function renderMpResults() {
     var el = $('mpResults');
-    var list = Game.mp.results || [];
-    if (!Game.mp.active || !list.length) {
+    var cur = Game.mp.results || [];
+    var standings = Game.mp.standings || [];
+    if (!Game.mp.active || (!cur.length && !standings.length)) {
       el.classList.add('hidden');
       el.innerHTML = '';
       return;
     }
-    var rows = list.slice().sort(function (a, b) { return (b.win - b.bet) - (a.win - a.bet); })
-      .map(function (r) {
-        var net = r.win - r.bet;
-        return '<tr class="' + (net > 0 ? 'won' : r.bet ? 'lost' : '') + '"><td>' + esc(r.who) + '</td>' +
-          '<td>' + (r.bet ? UI.money(r.bet) : '—') + '</td>' +
-          '<td>' + (r.bet ? UI.money(r.win) : '—') + '</td>' +
-          '<td><span class="' + (net >= 0 ? 'net-pos' : 'net-neg') + '">' +
-          (net >= 0 ? '+' : '−') + UI.money(Math.abs(net)) + '</span></td></tr>';
+    // 名單以累計排行為主，補上本場資料；本場有但累計還沒送達的也列出
+    var byWho = {}, order = [];
+    standings.forEach(function (s) {
+      byWho[s.who] = { who: s.who, cum: s.win - s.bet, bet: null, win: null };
+      order.push(s.who);
+    });
+    cur.forEach(function (r) {
+      if (!byWho[r.who]) { byWho[r.who] = { who: r.who, cum: null, bet: null, win: null }; order.push(r.who); }
+      byWho[r.who].bet = r.bet;
+      byWho[r.who].win = r.win;
+    });
+    var rows = order.map(function (k) { return byWho[k]; })
+      .sort(function (a, b) {
+        var ca = (a.cum !== null) ? a.cum : (a.win - a.bet);
+        var cb2 = (b.cum !== null) ? b.cum : (b.win - b.bet);
+        return cb2 - ca;
+      })
+      .map(function (r, idx) {
+        var played = r.bet !== null;
+        var net = played ? r.win - r.bet : 0;
+        var medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '';
+        var cumCell = (r.cum === null) ? '—'
+          : '<span class="' + (r.cum >= 0 ? 'net-pos' : 'net-neg') + '">' +
+            (r.cum >= 0 ? '+' : '−') + UI.money(Math.abs(r.cum)) + '</span>';
+        var roundCell = !played ? '—' : !r.bet ? '👀'
+          : '<span class="' + (net >= 0 ? 'net-pos' : 'net-neg') + '">' +
+            (net >= 0 ? '+' : '−') + UI.money(Math.abs(net)) + '</span>';
+        return '<tr class="' + (played && net > 0 ? 'won' : played && r.bet ? 'lost' : '') + '">' +
+          '<td>' + medal + ' ' + esc(r.who) + '</td>' +
+          '<td>' + (played && r.bet ? UI.money(r.bet) : '—') + '</td>' +
+          '<td>' + (played && r.bet ? UI.money(r.win) : '—') + '</td>' +
+          '<td>' + roundCell + '</td><td>' + cumCell + '</td></tr>';
       }).join('');
-    el.innerHTML = '<table class="result-table"><tr><th>🏠 全房戰績</th><th>下注</th><th>派彩</th><th>本場</th></tr>' + rows + '</table>';
+    el.innerHTML = '<table class="result-table"><tr><th>🏆 排行</th><th>下注</th><th>派彩</th><th>本場</th><th>累計</th></tr>' + rows + '</table>';
     el.classList.remove('hidden');
   }
 
@@ -570,7 +617,9 @@
       // —— 房主側 ——
       onJoined: function (name, conn, isNew) {
         Net.sendTo(conn, mpRoundMsg(conn)); // 同步重試也會重發場次快照（冪等）
-        if (isNew) mpFeedLine('🙌 <b>' + name + '</b> 加入了房間');
+        // 補發累計排行：新進/重連的人馬上看得到今晚戰況
+        if (Game.mp.stats) Net.sendTo(conn, { t: 'standings', list: mpStandingsList() });
+        if (isNew) mpFeedLine('🙌 <b>' + esc(name) + '</b> 加入了房間');
         mpUpdateUI();
       },
       onNonce: function (id, v) {
@@ -594,7 +643,19 @@
           mpFeedLine((net > 0 ? '🏆' : bet ? '💸' : '👀') + ' <b>' + esc(who) + '</b> 本場' +
             (bet ? '下注 ' + UI.money(bet) + '、派彩 ' + UI.money(win) +
               '（' + (net >= 0 ? '+' : '−') + UI.money(Math.abs(net)) + '）' : '純觀賽'));
+          // 房主＝記分台：逐場累計（只在「本場首筆」時加總，重送不會灌水）
+          if (Game.mp.host) {
+            var st = Game.mp.stats = Game.mp.stats || {};
+            var rec = st[who] = st[who] || { bet: 0, win: 0, rounds: 0 };
+            rec.bet += bet; rec.win += win; rec.rounds++;
+            mpBroadcastStandings();
+          }
         }
+        renderMpResults();
+      },
+      // —— 跨場累計排行（房主廣播）——
+      onStandings: function (list) {
+        Game.mp.standings = list;
         renderMpResults();
       },
       // —— 客人側 ——
@@ -720,6 +781,14 @@
       Game.mp.host = true;
       Game.mp.code = code;
       store.set('mproom', { code: code, host: true, t: Date.now() }); // 重載後自動回房用
+      // 頁面重載重開房（同房號、10 分鐘內）：還原今晚累計排行
+      var saved = store.get('mpstats', null);
+      if (saved && saved.code === code && Date.now() - (saved.t || 0) < 10 * 60 * 1000) {
+        Game.mp.stats = saved.stats || {};
+        Game.mp.standings = mpStandingsList();
+      } else {
+        store.set('mpstats', null);
+      }
       mpUpdateUI();
       mpNewRound();
       mpFeedLine('🏠 房間已開啟，把房號 <b>' + code + '</b> 或邀請連結傳給朋友吧！');
@@ -784,7 +853,9 @@
     }
     Game.bets = [];
     store.set('mproom', null); // 離房（含放棄重連）：清除自動回房資格
+    if (Game.mp.host) store.set('mpstats', null); // 房主收攤：今晚累計歸零
     if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
+    if (Game.mp._standTimer) clearTimeout(Game.mp._standTimer);
     Game.mp = { active: false, host: false, code: '', racer: null, hostSeed: null,
                 nonces: null, myNonce: null, nonceOk: true, waiting: false,
                 synced: false, syncTimer: null, startAt: null, pendingReveal: null,

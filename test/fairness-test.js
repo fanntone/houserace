@@ -124,6 +124,32 @@ console.log('\n[3] 賽果誠實：固定一組實力抽 30 萬次名次，頻率
   check('二重彩 頻率≈機率（max z = ' + fmt(zExa, 2) + ' < 4.5）', zExa < 4.5);
 })();
 
+// ---------- 3.5 多人場次：多方可驗證公平 ----------
+console.log('\n[3.5] 多人場次：最終賽果由全員隨機數共同決定');
+(function () {
+  var hostSeed = 'aabbccdd11223344aabbccdd11223344';
+  var mp = Model.buildRoundMP(hostSeed, 8, 1.0);
+  check('房主雜湊 = sha256(hostSeed)', mp.hash === RNG.sha256(hostSeed));
+  var nonces = ['n1aaaa', 'n2bbbb', 'n3cccc'];
+  var o1 = Model.finishFromSeeds(hostSeed, nonces, mp.horses);
+  var o2 = Model.finishFromSeeds(hostSeed, nonces, mp.horses);
+  check('同樣輸入重現同名次（可驗證）', o1.join(',') === o2.join(','));
+  // 任一玩家的 nonce 改變就會改變賽果 ⇒ 下注截止前無人能預知
+  var changed = 0;
+  for (var t = 0; t < 20; t++) {
+    var alt = Model.finishFromSeeds(hostSeed, ['n1aaaa', 'n2bbbb', 'x' + t], mp.horses);
+    if (alt.join(',') !== o1.join(',')) changed++;
+  }
+  check('改變單一 nonce 會改變賽果（20 次中 ' + changed + ' 次不同）', changed >= 15);
+  // 還原精簡馬匹資料
+  var slim = mp.horses.map(function (h) { return { num: h.num, name: h.name, strength: h.strength }; });
+  var revived = Model.reviveHorses(slim);
+  check('精簡資料還原（名稱/實力/色布一致）',
+    revived[3].name === mp.horses[3].name &&
+    revived[3].strength === mp.horses[3].strength &&
+    revived[3].color.bg === mp.horses[3].color.bg);
+})();
+
 // ---------- 4. 結算邏輯單元檢查 ----------
 console.log('\n[4] 結算邏輯（名次 3-7-5-…，前三名 3,7,5）');
 (function () {

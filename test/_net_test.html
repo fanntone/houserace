@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>net protocol test</title></head>
+<body style="background:#11151c;color:#ccc;font:13px monospace;padding:12px">
+<div id="out">running…</div>
+<script>
+// MockPeer：記憶體內訊息匯流排，介面對齊 PeerJS（測 net.js 協定邏輯，不測真實傳輸）
+(function () {
+  var REG = {}, SEQ = 0;
+  function emit(obj, ev) {
+    var args = [].slice.call(arguments, 2);
+    (obj._h[ev] || []).forEach(function (f) { f.apply(null, args); });
+  }
+  function makeEnd(peerId) {
+    return {
+      open: false, peer: peerId, _h: {},
+      on: function (ev, cb) { (this._h[ev] = this._h[ev] || []).push(cb); return this; },
+      send: function (msg) {
+        var o = this._other, m = JSON.parse(JSON.stringify(msg));
+        setTimeout(function () { emit(o, 'data', m); }, 0);
+      },
+      close: function () {
+        var o = this._other;
+        setTimeout(function () { emit(o, 'close'); }, 0);
+      }
+    };
+  }
+  function Peer(id, opts) {
+    if (typeof id !== 'string') { id = 'anon-' + (++SEQ); }
+    this.id = id;
+    this._h = {};
+    REG[id] = this;
+    var self = this;
+    setTimeout(function () { emit(self, 'open', id); }, 0);
+  }
+  Peer.prototype.on = function (ev, cb) { (this._h[ev] = this._h[ev] || []).push(cb); return this; };
+  Peer.prototype.connect = function (targetId) {
+    var local = makeEnd(targetId);
+    var self = this;
+    setTimeout(function () {
+      var target = REG[targetId];
+      if (!target) { emit(self, 'error', { type: 'peer-unavailable' }); return; }
+      var remote = makeEnd(self.id);
+      local._other = remote;
+      remote._other = local;
+      emit(target, 'connection', remote);
+      setTimeout(function () {
+        local.open = true;
+        remote.open = true;
+        emit(local, 'open');
+        emit(remote, 'open');
+      }, 0);
+    }, 0);
+    return local;
+  };
+  Peer.prototype.destroy = function () { delete REG[this.id]; };
+  window.Peer = Peer;
+})();
+</script>
+<script src="../js/rng.js"></script>
+<script src="../js/model.js"></script>
+<script src="../js/net.js"></script>
+<script>var NetHost = window.Net;</script>
+<script src="../js/net.js"></script>
+<script>var NetGuest = window.Net;</script>
+<script>
+// 完整協定走一遍：開房→加入→場次→下注→鎖注→隨機數→開跑→揭示驗證
+var log = [], failed = false;
+function ok(name, cond) {
+  log.push((cond ? '✓ ' : '✗ ') + name);
+  if (!cond) failed = true;
+}
+function done() {
+  document.getElementById('out').innerHTML = log.join('<br>') +
+    '<br><b id="final">' + (failed ? 'NET FAIL ✗' : 'NET PASS ✓ (' + log.length + ' 項)') + '</b>';
+  document.title = failed ? 'FAIL' : 'PASS';
+}
+
+var hostSeed = RNG.randomSeedHex();
+var mpRound = Model.buildRoundMP(hostSeed, 8, 1.0);
+var hostNonce = 'aabb00', guestNonce = 'cafe1234';
+var state = { guestRound: null, guestOrder: null, guestNonces: null, feeds: 0, locks: 0 };
+
+NetHost.host('測試房主', {
+  onJoined: function (name, conn) {
+    ok('房主收到加入：' + name, name === '小貓');
+    NetHost.sendTo(conn, {
+      t: 'round', no: 1, hash: mpRound.hash, rtp: 1, racer: 'horse',
+      horses: mpRound.horses.map(function (h) { return { num: h.num, name: h.name, strength: h.strength }; }),
+      countdown: 30, phase: 'betting'
+    });
+  },
+  onPlayers: function (list) { state.hostPlayers = list.length; },
+  onBetFeed: function (who, bet) { state.feeds++; },
+  onNonce: function (id, v) {
+    ok('房主收到玩家隨機數', v === guestNonce);
+    var order = Model.finishFromSeeds(hostSeed, [hostNonce, v], mpRound.horses);
+    NetHost.broadcast({ t: 'start', order: order, nonces: [hostNonce, v] });
+    state.hostOrder = order;
+    setTimeout(function () {
+      NetHost.broadcast({ t: 'reveal', hostSeed: hostSeed });
+    }, 10);
+  }
+}, function (code) {
+  ok('開房成功，房號 ' + code, /^[A-Z2-9]{6}$/.test(code));
+
+  NetGuest.join(code, '小貓', {
+    onRound: function (msg) {
+      var horses = Model.reviveHorses(msg.horses);
+      state.guestRound = { hash: msg.hash, horses: horses, market: Model.computeMarket(horses, msg.rtp) };
+      ok('客人收到場次（8 匹、雜湊一致）', horses.length === 8 && msg.hash === mpRound.hash);
+      ok('客人本地重算盤口（獨贏賠率一致）',
+        Math.abs(state.guestRound.market.win[0].odds - mpRound.market.win[0].odds) < 1e-9);
+      NetGuest.sendBet({ type: 'win', sel: [3], amount: 100, odds: 5 });
+      setTimeout(function () {
+        NetHost.broadcast({ t: 'lock' });
+      }, 20);
+    },
+    onBetFeed: function (who, bet) {
+      ok('客人收到注單動態回播', who === '小貓' && bet.amount === 100);
+    },
+    onLock: function () {
+      state.locks++;
+      NetGuest.sendNonce(guestNonce);
+    },
+    onStart: function (msg) {
+      state.guestOrder = msg.order;
+      state.guestNonces = msg.nonces;
+      ok('客人收到開跑（名次 8 匹、含自己的隨機數）',
+        msg.order.length === 8 && msg.nonces.indexOf(guestNonce) !== -1);
+    },
+    onReveal: function (msg) {
+      ok('揭示：sha256(房主種子) = 下注前雜湊', RNG.sha256(msg.hostSeed) === state.guestRound.hash);
+      var re = Model.finishFromSeeds(msg.hostSeed, state.guestNonces, state.guestRound.horses);
+      ok('揭示：名次可由種子＋隨機數重現', re.join(',') === state.guestOrder.join(','));
+      ok('房主側名次與客人一致', state.hostOrder.join(',') === state.guestOrder.join(','));
+      ok('注單動態房主側也收到', state.feeds >= 1);
+      ok('線上人數 = 2', state.hostPlayers === 2);
+      done();
+    },
+    onLeft: function () { ok('不應觸發 onLeft', false); done(); }
+  }, function () {
+    ok('客人連線成功', true);
+  }, function (err) {
+    ok('加入失敗：' + err.message, false);
+    done();
+  });
+}, function (err) {
+  ok('開房失敗', false);
+  done();
+});
+
+setTimeout(function () { // 保險：5 秒未完成視為失敗
+  if (!document.getElementById('final')) { ok('逾時未完成', false); done(); }
+}, 5000);
+</script>
+</body></html>

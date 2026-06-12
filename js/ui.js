@@ -179,6 +179,7 @@
 
   // ---------- 驗證面板 ----------
   function renderVerify(round) {
+    if (round.mpData) { renderVerifyMP(round); return; } // 多人場次走多方驗證
     var recomputed = Model.buildRound(round.seed, round.horses.length, round.rtp);
     var hashOk = recomputed.hash === round.hash;
     var orderOk = recomputed.finishOrder.join(',') === round.finishOrder.join(',');
@@ -204,6 +205,40 @@
              : '✗ 驗證失敗：資料不一致。') + '</div>' +
       '<p class="vf-note">自行驗證：任何 SHA-256 工具算出的「種子雜湊」都會等於上方公布值；' +
       '賽果由種子經 sfc32 + Plackett-Luce 抽樣決定（原始碼 js/model.js 可查）。</p>';
+  }
+
+  // 多人場次驗證：賽果 = f(房主種子, 全體玩家隨機數)，任一方都無法單獨操控
+  function renderVerifyMP(round) {
+    var d = round.mpData;
+    function row(label, val) {
+      return '<div class="vf-row"><span class="vf-label">' + label + '</span><code>' + val + '</code></div>';
+    }
+    function badge(ok) {
+      return '<span class="' + (ok ? 'vf-ok' : 'vf-bad') + '">' + (ok ? '✓ 一致' : '✗ 不一致！') + '</span>';
+    }
+    if (!d.hostSeed) {
+      $('verifyBody').innerHTML = '<p>等待房主揭示種子後即可驗證……</p>';
+      return;
+    }
+    var hashOk = RNG.sha256(d.hostSeed) === round.hash;
+    var reOrder = Model.finishFromSeeds(d.hostSeed, d.nonces, round.horses);
+    var orderOk = reOrder.join(',') === round.finishOrder.join(',');
+    var finText = round.finishOrder.map(function (i) { return round.horses[i].num; }).join(' → ');
+    var reText = reOrder.map(function (i) { return round.horses[i].num; }).join(' → ');
+    var allOk = hashOk && orderOk && d.nonceOk;
+    $('verifyBody').innerHTML =
+      row('房主種子（賽後揭示）', d.hostSeed) +
+      row('下注前公布的雜湊', round.hash) +
+      row('重新計算 SHA-256(種子)', RNG.sha256(d.hostSeed)) +
+      '<div class="vf-row">' + badge(hashOk) + '　雜湊比對</div>' +
+      row('全體玩家隨機數（' + d.nonces.length + ' 份）', d.nonces.join(', ')) +
+      '<div class="vf-row">' + badge(d.nonceOk) + '　我的隨機數已納入賽果</div>' +
+      row('實際名次（馬號）', finText) +
+      row('由種子＋隨機數重現的名次', reText) +
+      '<div class="vf-row">' + badge(orderOk) + '　名次重現</div>' +
+      '<div class="vf-conclusion ' + (allOk ? 'vf-ok' : 'vf-bad') + '">' +
+      (allOk ? '✓ 驗證通過：賽果由房主種子＋全體玩家隨機數共同決定，下注截止前無人能預知。'
+             : '✗ 驗證失敗：資料不一致，本場結果不可信。') + '</div>';
   }
 
   // ---------- Modal / 分頁 ----------

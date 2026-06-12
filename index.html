@@ -14,6 +14,7 @@
   <div class="pill phase" id="phasePill">下注中</div>
   <div class="spacer"></div>
   <div class="balance">💰 <span id="balance">10,000</span> 點</div>
+  <button class="icon-btn" id="btnMp" title="多人連線">🌐</button>
   <button class="icon-btn" id="btnSettings" title="設定">⚙</button>
   <button class="icon-btn help-btn" id="btnHelp" title="玩法說明">？</button>
 </header>
@@ -72,6 +73,11 @@
         <div id="commentary">歡迎光臨皇冠賽馬場！請在左側下注，或純觀賽。</div>
         <button class="icon-btn voice-btn" id="btnVoice" title="語音旁述開關">🔊</button>
       </div>
+      <div id="mpBar" class="hidden">
+        <span id="mpStatus">🌐</span>
+        <span id="mpPlayers"></span>
+        <div id="mpFeed"></div>
+      </div>
       <ol id="rankBoard"></ol>
     </div>
   </section>
@@ -83,7 +89,7 @@
   <span class="fair-item hidden" id="fairSeedWrap">上一場種子：<code id="fairSeed"></code>
     <button class="small" id="btnVerify">驗證</button>
   </span>
-  <span class="fair-item" id="appVer">build 2026-06-11.gate-inner-1</span>
+  <span class="fair-item" id="appVer">build 2026-06-12.mp-1</span>
 </footer>
 
 <!-- ====== 結果面板 ====== -->
@@ -110,6 +116,37 @@
     <div class="modal-actions">
       <button id="btnCloseVerify">關閉</button>
     </div>
+  </div>
+</div>
+
+<!-- ====== 多人房間 ====== -->
+<div class="modal hidden" id="mpModal">
+  <div class="modal-box">
+    <h2>🌐 多人同樂（P2P 房間）</h2>
+    <div id="mpSolo">
+      <div class="setting-row">
+        <label>暱稱</label>
+        <input id="mpName" maxlength="12" placeholder="自動產生">
+      </div>
+      <div class="setting-row">
+        <button class="primary" id="btnMpHost">🏠 開房（我當房主）</button>
+      </div>
+      <div class="setting-row">
+        <label>房號</label>
+        <input id="mpCode" maxlength="6" placeholder="例：K7X2AB">
+        <button id="btnMpJoin">加入房間</button>
+      </div>
+      <p class="vf-note">房主的瀏覽器就是伺服器——房主保持分頁開啟在前景，朋友輸入房號或開啟邀請連結即可加入。
+      點數各自管理；場次、注單動態、賽果全房同步。賽果由「房主種子＋全體玩家隨機數」共同決定，
+      下注截止前連房主都無法預知，賽後可逐場驗證。</p>
+    </div>
+    <div id="mpIn" class="hidden">
+      <div class="vf-row"><span class="vf-label">房號</span><code id="mpCodeShow"></code>
+        <button class="small" id="btnMpCopy">複製邀請連結</button></div>
+      <div class="vf-row"><span class="vf-label">線上人數</span><b id="mpCountShow">1</b></div>
+      <div class="modal-actions"><button id="btnMpLeave">離開房間</button></div>
+    </div>
+    <div class="modal-actions"><button class="primary" id="btnMpClose">關閉</button></div>
   </div>
 </div>
 
@@ -229,6 +266,8 @@
 <script src="js/rng.js"></script>
 <script src="js/model.js"></script>
 <script src="js/betting.js"></script>
+<script src="vendor/peerjs.min.js"></script>
+<script src="js/net.js"></script>
 <script src="js/race.js"></script>
 <script src="vendor/three.min.js"></script>
 <script src="vendor/GLTFLoader.js"></script>

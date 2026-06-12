@@ -179,6 +179,42 @@
     };
   }
 
+  /**
+   * 多人場次（多方可驗證公平）：
+   *  1) 房主種子只決定馬匹與盤口（先公布 hash(hostSeed) 與馬匹資料）
+   *  2) 全員下注鎖定後，每位玩家提交隨機數 nonce
+   *  3) 最終名次由 finalSeed = sha256(hostSeed|nonce1|...|nonceK) 抽出
+   *     ⇒ 下注截止前（含房主）無人能預知賽果；賽後公開 hostSeed 全員可驗證
+   */
+  function buildRoundMP(hostSeed, numHorses, rtp) {
+    var rand = RNG.seededRand(hostSeed);
+    var horses = generateHorses(rand, numHorses);
+    var market = computeMarket(horses, rtp);
+    return { seed: hostSeed, hash: RNG.sha256(hostSeed), rtp: rtp, horses: horses, market: market };
+  }
+
+  function finalSeedMP(hostSeed, nonces) {
+    return RNG.sha256(hostSeed + '|' + nonces.join('|'));
+  }
+
+  function finishFromSeeds(hostSeed, nonces, horses) {
+    var rand = RNG.seededRand(finalSeedMP(hostSeed, nonces));
+    return sampleFinishOrder(rand, horses.map(function (h) { return h.strength; }));
+  }
+
+  // 從網路傳輸的精簡馬匹資料（num/name/strength）還原完整物件（色布/毛色本地補齊）
+  function reviveHorses(list) {
+    return list.map(function (h) {
+      return {
+        num: h.num,
+        name: h.name,
+        strength: h.strength,
+        color: SADDLE[(h.num - 1) % SADDLE.length],
+        coat: COATS[Math.max(0, NAMES.indexOf(h.name)) % COATS.length]
+      };
+    });
+  }
+
   var Model = {
     NAMES: NAMES,
     SADDLE: SADDLE,
@@ -187,7 +223,11 @@
     placeProbs: placeProbs,
     computeMarket: computeMarket,
     sampleFinishOrder: sampleFinishOrder,
-    buildRound: buildRound
+    buildRound: buildRound,
+    buildRoundMP: buildRoundMP,
+    finalSeedMP: finalSeedMP,
+    finishFromSeeds: finishFromSeeds,
+    reviveHorses: reviveHorses
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Model;

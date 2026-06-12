@@ -310,6 +310,40 @@ main {
 .rb-name { font-weight: bold; }
 .rb-odds { margin-left: auto; color: #ffd43b; font-size: 12px; }
 
+/* ---------- 多人房間 ---------- */
+#mpBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #131a24;
+  border: 1px solid #2b6cb066;
+  border-radius: 8px;
+  font-size: 12px;
+}
+#mpStatus { color: #74c0fc; font-weight: bold; }
+.mp-chip {
+  background: #233048;
+  border-radius: 99px;
+  padding: 2px 10px;
+  font-size: 11px;
+}
+#mpFeed { flex-basis: 100%; color: #9aa3b2; font-size: 11.5px; line-height: 1.6; }
+#mpFeed b { color: #ffd43b; }
+.mp-on { box-shadow: 0 0 0 2px #74c0fc; }
+#mpModal input {
+  background: #2a3240;
+  color: #e9ecef;
+  border: 1px solid #3b4452;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: inherit;
+  width: 150px;
+}
+#mpCode { text-transform: uppercase; letter-spacing: 2px; width: 120px; }
+
 /* ---------- 號碼布 ---------- */
 .numchip {
   display: inline-flex;

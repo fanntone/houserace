@@ -32,6 +32,9 @@
     },
     round: null,
     lastRound: null,
+    // 多人房間狀態（P2P）：host=房主（其瀏覽器即伺服器）
+    mp: { active: false, host: false, code: '', racer: null, hostSeed: null,
+          nonces: null, myNonce: null, nonceOk: true, waiting: false },
     bets: [],
     betType: 'win',
     sel: null,
@@ -66,13 +69,15 @@
   }
 
   function renderBets() {
-    UI.renderBetList($('betList'), Game.bets, Game.phase === 'betting', removeBet);
+    UI.renderBetList($('betList'), Game.bets,
+      Game.phase === 'betting' && !Game.mp.active, removeBet);
   }
 
   // ---------- 場次持久化（修復：重載頁面後注金已扣但注單消失） ----------
   // 未結算的場次（種子+參數+注單）隨時寫入儲存；結算時清除。
   // 重載時用同一種子重建同一場比賽（種子確定性保證馬匹/賠率/賽果完全一致）。
   function savePending() {
+    if (Game.mp.active) return; // 多人場次不持久化（斷線即離房，注金由離房流程退還）
     store.set('pending', {
       seed: Game.round.seed,
       no: Game.round.no,
@@ -126,11 +131,18 @@
     Game.round = round;
     Game.sel = null;
     Game.amount = 0;
+    makeAnimator(round);
+    finishBeginRound(round);
+  }
 
+  // 建立（或重建）動畫器。多人模式下注期間名次未定，先用占位順序畫閘口，
+  // 開跑時拿到全員隨機數決定的真名次再重建。
+  function makeAnimator(round) {
     if (Game.animator) Game.animator.stop();
+    var order = round.finishOrder || round.horses.map(function (_, i) { return i; });
     var animOpts = {
       duration: Game.settings.duration,
-      racerType: Game.settings.racer,
+      racerType: (Game.mp.active && Game.mp.racer) ? Game.mp.racer : Game.settings.racer,
       infieldText: '第 ' + round.no + ' 場',
       infieldSub: '派彩率 ' + Math.round(round.rtp * 100) + '%　' + round.horses.length + ' 匹出賽',
       onCommentary: function (text) {
@@ -156,13 +168,15 @@
     // 優先用 Three.js 真 3D 轉播；WebGL 不可用時退回 2D
     try {
       if (typeof RaceAnimator3D === 'undefined') throw new Error('no THREE');
-      Game.animator = new RaceAnimator3D($('track'), round.horses, round.finishOrder, animOpts);
+      Game.animator = new RaceAnimator3D($('track'), round.horses, order, animOpts);
     } catch (e) {
       console.warn('3D 初始化失敗，改用 2D 渲染：', e);
-      Game.animator = new RaceAnimator($('track'), round.horses, round.finishOrder, animOpts);
+      Game.animator = new RaceAnimator($('track'), round.horses, order, animOpts);
     }
     Game.animator.drawIdle();
+  }
 
+  function finishBeginRound(round) {
     $('roundNo').textContent = '第 ' + round.no + ' 場';
     $('fairHash').textContent = round.hash;
     setPhase('betting');
@@ -181,10 +195,19 @@
     $('countdown').textContent = Game.countdown;
     if (Game.countdownTimer) clearInterval(Game.countdownTimer);
     Game.countdownTimer = setInterval(function () {
-      if (UI.anyModalOpen()) return; // 看說明/設定時暫停倒數
+      if (!Game.mp.active && UI.anyModalOpen()) return; // 單機看說明時暫停；多人不暫停（全房同步）
       Game.countdown--;
-      $('countdown').textContent = Game.countdown;
-      if (Game.countdown <= 0) startRace();
+      $('countdown').textContent = Math.max(0, Game.countdown);
+      if (Game.countdown <= 0) {
+        if (Game.mp.active && !Game.mp.host) { // 客人：等房主鎖注訊息
+          clearInterval(Game.countdownTimer);
+          $('countdown').textContent = '0';
+        } else if (Game.mp.active && Game.mp.host) {
+          mpLock();
+        } else {
+          startRace();
+        }
+      }
     }, 1000);
   }
 
@@ -228,13 +251,14 @@
     Game.balance -= bet.amount;
     store.set('balance', Game.balance);
     savePending(); // 注單與扣款一起持久化
+    if (Game.mp.active) Net.sendBet(bet); // 多人：注單動態同步全房
     updateBalance();
     renderBets();
     hideTicket();
   }
 
   function removeBet(i) {
-    if (Game.phase !== 'betting') return;
+    if (Game.phase !== 'betting' || Game.mp.active) return; // 多人模式注單已廣播，不可撤
     var bet = Game.bets.splice(i, 1)[0];
     Game.balance += bet.amount;
     store.set('balance', Game.balance);
@@ -269,12 +293,37 @@
     store.set('pending', null); // 場次已結算，清除還原點
     Game.lastRound = round;
 
+    // 多人：記錄多方公平資料；房主揭示種子讓全房驗證
+    if (Game.mp.active) {
+      round.mpData = {
+        hostSeed: Game.mp.host ? Game.mp.hostSeed : null, // 客人等 reveal 訊息補上
+        nonces: Game.mp.nonces || [],
+        nonceOk: Game.mp.nonceOk
+      };
+      if (Game.mp.host) Net.broadcast({ t: 'reveal', hostSeed: Game.mp.hostSeed });
+    }
+
     setPhase('result');
     updateBalance();
     UI.renderRankBoard($('rankBoard'), round.horses, round.finishOrder, round.market, true);
     $('fairSeedWrap').classList.remove('hidden');
-    $('fairSeed').textContent = round.seed;
+    $('fairSeed').textContent = round.seed || (round.mpData && round.mpData.hostSeed) || '（多人場次）';
     UI.renderResult(round, res, Game.balance);
+    if (Game.mp.active) {
+      $('resultSeed').textContent = (round.mpData.hostSeed || '等待房主揭示…');
+      var nb = $('btnNextRound');
+      if (Game.mp.host) {
+        nb.disabled = false;
+        nb.textContent = '下一場 ▶（全房同步）';
+      } else {
+        nb.disabled = true;
+        nb.textContent = '等待房主開下一場…';
+      }
+    } else {
+      var nb2 = $('btnNextRound');
+      nb2.disabled = false;
+      nb2.textContent = '下一場 ▶';
+    }
     UI.showModal('resultModal');
   }
 
@@ -282,6 +331,263 @@
     if (!Game.lastRound) return;
     UI.renderVerify(Game.lastRound);
     UI.showModal('verifyModal');
+  }
+
+  // ---------- 多人房間（P2P）：場次同步、注單動態、多方公平 ----------
+  function mpName() {
+    return ($('mpName').value || '').trim().slice(0, 12) ||
+      ('玩家' + Math.floor(Math.random() * 900 + 100));
+  }
+
+  function mpFeedLine(html) {
+    var feed = $('mpFeed');
+    var d = document.createElement('div');
+    d.innerHTML = html;
+    feed.insertBefore(d, feed.firstChild);
+    while (feed.children.length > 5) feed.removeChild(feed.lastChild);
+  }
+
+  function mpUpdateUI() {
+    var on = Game.mp.active;
+    $('mpBar').classList.toggle('hidden', !on);
+    $('mpSolo').classList.toggle('hidden', on);
+    $('mpIn').classList.toggle('hidden', !on);
+    $('btnMp').classList.toggle('mp-on', on);
+    if (on) {
+      $('mpCodeShow').textContent = Game.mp.code;
+      $('mpStatus').textContent = '🌐 房間 ' + Game.mp.code +
+        (Game.mp.host ? '（你是房主）' : '') + '・' + Net.count() + ' 人在線';
+      $('mpCountShow').textContent = Net.count();
+    }
+  }
+
+  function mpRenderPlayers(list) {
+    $('mpPlayers').innerHTML = list.map(function (p) {
+      return '<span class="mp-chip">' + p.name +
+        (p.betCount ? '（' + p.betCount + ' 注）' : '') + '</span>';
+    }).join('');
+    mpUpdateUI();
+  }
+
+  function mpRoundMsg(forConn) {
+    return {
+      t: 'round',
+      no: Game.round.no,
+      hash: Game.round.hash,
+      rtp: Game.round.rtp,
+      racer: Game.settings.racer,
+      horses: Game.round.horses.map(function (h) {
+        return { num: h.num, name: h.name, strength: h.strength };
+      }),
+      countdown: Game.phase === 'betting' ? Game.countdown : 0,
+      phase: Game.phase === 'betting' ? 'betting' : 'waiting'
+    };
+  }
+
+  // 房主開新場：種子只決定馬匹盤口，名次等全員隨機數混合後才產生
+  function mpNewRound() {
+    Voice.stop();
+    Game.mp.hostSeed = RNG.randomSeedHex();
+    Game.mp.nonces = null;
+    var round = Model.buildRoundMP(Game.mp.hostSeed, Game.settings.horses, Game.settings.rtp);
+    Game.roundCounter++;
+    round.no = Game.roundCounter;
+    Game.bets = [];
+    Game.mp.racer = Game.settings.racer;
+    beginRound(round);
+    Net.resetBetStats();
+    Net.broadcast(mpRoundMsg());
+  }
+
+  // 房主：下注截止 → 收集全員隨機數 → 廣播開跑
+  function mpLock() {
+    if (Game.phase !== 'betting' || !Game.mp.host) return;
+    clearInterval(Game.countdownTimer);
+    setPhase('racing');
+    hideTicket();
+    renderBets();
+    $('countdownOverlay').classList.add('hidden');
+    Net.broadcast({ t: 'lock' });
+    $('commentary').textContent = '📣 下注截止！收集全員隨機數，產生賽果…';
+    Game.mp.nonces = [RNG.randomSeedHex().slice(0, 16)]; // 房主自己的隨機數
+    setTimeout(function () {
+      if (!Game.mp.active || !Game.mp.host) return;
+      var order = Model.finishFromSeeds(Game.mp.hostSeed, Game.mp.nonces, Game.round.horses);
+      Net.broadcast({ t: 'start', order: order, nonces: Game.mp.nonces });
+      mpStartRace(order);
+    }, 1500);
+  }
+
+  // 全員：拿到名次後重建動畫器並開跑
+  function mpStartRace(order) {
+    Game.round.finishOrder = order;
+    makeAnimator(Game.round);
+    setPhase('racing');
+    hideTicket();
+    renderBets();
+    $('countdownOverlay').classList.add('hidden');
+    $('speedCtrl').classList.remove('hidden');
+    Game.animator.setSpeed(1);
+    document.querySelectorAll('#speedCtrl .spd').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.speed === '1');
+    });
+    Game.animator.start();
+  }
+
+  // 客人：套用房主廣播的場次
+  function mpApplyRound(msg) {
+    Voice.stop();
+    UI.hideModal('resultModal');
+    var horses = Model.reviveHorses(msg.horses || []);
+    var round = {
+      seed: null,
+      hash: msg.hash,
+      rtp: msg.rtp,
+      no: msg.no,
+      horses: horses,
+      market: Model.computeMarket(horses, msg.rtp),
+      finishOrder: null
+    };
+    Game.roundCounter = msg.no;
+    Game.bets = [];
+    Game.mp.racer = msg.racer || 'horse';
+    Game.mp.myNonce = null;
+    Game.mp.nonces = null;
+    Game.mp.nonceOk = true;
+    beginRound(round);
+    if (msg.phase !== 'betting') { // 中途加入：本場觀望，等下一場
+      Game.mp.waiting = true;
+      clearInterval(Game.countdownTimer);
+      $('countdownOverlay').classList.add('hidden');
+      setPhase('result');
+      $('commentary').textContent = '📣 本場已開跑，請稍候——下一場開始即可下注！';
+    } else {
+      Game.mp.waiting = false;
+      Game.countdown = Math.max(5, msg.countdown | 0);
+      $('countdown').textContent = Game.countdown;
+    }
+  }
+
+  function mpCallbacks() {
+    return {
+      // —— 房主側 ——
+      onJoined: function (name, conn) {
+        Net.sendTo(conn, mpRoundMsg(conn));
+        mpFeedLine('🙌 <b>' + name + '</b> 加入了房間');
+        mpUpdateUI();
+      },
+      onNonce: function (id, v) {
+        if (Game.mp.nonces && Game.mp.nonces.length < 64 && v) Game.mp.nonces.push(v);
+      },
+      // —— 共用 ——
+      onPlayers: mpRenderPlayers,
+      onBetFeed: function (who, bet) {
+        if (bet) mpFeedLine('💰 <b>' + who + '</b> 下注 ' + Betting.describeBet(bet) +
+          ' ×' + UI.money(bet.amount));
+      },
+      // —— 客人側 ——
+      onRound: mpApplyRound,
+      onLock: function () {
+        if (Game.mp.waiting) return;
+        clearInterval(Game.countdownTimer);
+        setPhase('racing');
+        hideTicket();
+        renderBets();
+        $('countdownOverlay').classList.add('hidden');
+        Game.mp.myNonce = RNG.randomSeedHex().slice(0, 16);
+        Net.sendNonce(Game.mp.myNonce);
+        $('commentary').textContent = '📣 下注截止！已提交你的隨機數，等待開跑…';
+      },
+      onStart: function (msg) {
+        if (Game.mp.waiting) return;
+        Game.mp.nonces = msg.nonces || [];
+        Game.mp.nonceOk = !Game.mp.myNonce || Game.mp.nonces.indexOf(Game.mp.myNonce) !== -1;
+        mpStartRace(msg.order || []);
+      },
+      onReveal: function (msg) {
+        if (Game.lastRound && Game.lastRound.mpData) {
+          Game.lastRound.mpData.hostSeed = msg.hostSeed;
+          if (!document.getElementById('resultModal').classList.contains('hidden')) {
+            $('resultSeed').textContent = msg.hostSeed;
+          }
+        }
+      },
+      onLeft: function () {
+        leaveMP('📣 房主已離線，已退還本場注金並切回單機模式。');
+      }
+    };
+  }
+
+  // 進房前收拾單機狀態：退還未結算注金、清掉斷線還原點
+  function mpPrep() {
+    if (Game.phase !== 'result' && Game.bets.length) {
+      var refund = 0;
+      Game.bets.forEach(function (b) { refund += b.amount; });
+      Game.balance += refund;
+      store.set('balance', Game.balance);
+    }
+    Game.bets = [];
+    store.set('pending', null);
+    if (Game.countdownTimer) clearInterval(Game.countdownTimer);
+    if (Game.animator) Game.animator.stop();
+    Voice.stop();
+    $('mpFeed').innerHTML = '';
+  }
+
+  function enterHost() {
+    if (typeof Peer === 'undefined') { alert('P2P 元件載入失敗'); return; }
+    var name = mpName();
+    store.set('name', name);
+    mpPrep();
+    $('commentary').textContent = '📣 開房中…';
+    Net.host(name, mpCallbacks(), function (code) {
+      Game.mp.active = true;
+      Game.mp.host = true;
+      Game.mp.code = code;
+      mpUpdateUI();
+      mpNewRound();
+      mpFeedLine('🏠 房間已開啟，把房號 <b>' + code + '</b> 或邀請連結傳給朋友吧！');
+    }, function (err) {
+      alert('開房失敗：' + (err && err.message || err && err.type || err));
+      leaveMP(null);
+    });
+  }
+
+  function enterJoin(code) {
+    if (typeof Peer === 'undefined') { alert('P2P 元件載入失敗'); return; }
+    if (!code || code.length < 4) { alert('請輸入正確的房號'); return; }
+    var name = mpName();
+    store.set('name', name);
+    mpPrep();
+    $('commentary').textContent = '📣 連線到房間 ' + code.toUpperCase() + '…';
+    Net.join(code, name, mpCallbacks(), function () {
+      Game.mp.active = true;
+      Game.mp.host = false;
+      Game.mp.code = Net.code;
+      mpUpdateUI();
+      UI.hideModal('mpModal');
+      $('commentary').textContent = '📣 已加入房間，同步場次中…';
+    }, function (err) {
+      alert(err.message);
+      leaveMP(null);
+    });
+  }
+
+  function leaveMP(message) {
+    Net.leave();
+    if (Game.phase !== 'result' && Game.bets.length) { // 未結算注金退還
+      var refund = 0;
+      Game.bets.forEach(function (b) { refund += b.amount; });
+      Game.balance += refund;
+      store.set('balance', Game.balance);
+    }
+    Game.bets = [];
+    Game.mp = { active: false, host: false, code: '', racer: null, hostSeed: null,
+                nonces: null, myNonce: null, nonceOk: true, waiting: false };
+    mpUpdateUI();
+    UI.hideModal('resultModal');
+    newRound();
+    if (message) $('commentary').textContent = message;
   }
 
   // ---------- 事件綁定 ----------
@@ -320,7 +626,37 @@
 
     $('btnNextRound').addEventListener('click', function () {
       UI.hideModal('resultModal');
-      newRound();
+      if (Game.mp.active) {
+        if (Game.mp.host) mpNewRound(); // 客人按鈕已停用，等房主廣播
+      } else {
+        newRound();
+      }
+    });
+
+    // 多人房間
+    $('btnMp').addEventListener('click', function () {
+      $('mpName').value = store.get('name', '');
+      UI.showModal('mpModal');
+    });
+    $('btnMpClose').addEventListener('click', function () { UI.hideModal('mpModal'); });
+    $('btnMpHost').addEventListener('click', function () {
+      UI.hideModal('mpModal');
+      enterHost();
+    });
+    $('btnMpJoin').addEventListener('click', function () {
+      enterJoin($('mpCode').value);
+    });
+    $('btnMpLeave').addEventListener('click', function () {
+      UI.hideModal('mpModal');
+      leaveMP('📣 已離開房間，回到單機模式。');
+    });
+    $('btnMpCopy').addEventListener('click', function () {
+      var link = location.origin + location.pathname + '#room=' + Game.mp.code;
+      try {
+        navigator.clipboard.writeText(link);
+        $('btnMpCopy').textContent = '已複製 ✓';
+        setTimeout(function () { $('btnMpCopy').textContent = '複製邀請連結'; }, 1500);
+      } catch (e) { prompt('複製這個連結給朋友：', link); }
     });
 
     $('btnVerify').addEventListener('click', openVerify);
@@ -434,6 +770,16 @@
   Voice.setEnabled(voiceOn);
   Voice.setPreferred(store.get('voiceName', '') || null);
   $('btnVoice').textContent = voiceOn ? '🔊' : '🔇';
+  // 邀請連結 #room=XXXX：自動帶入房號並打開多人面板
+  var roomMatch = location.hash.match(/room=([A-Za-z0-9]{4,8})/);
+  if (roomMatch) {
+    setTimeout(function () {
+      $('mpName').value = store.get('name', '');
+      $('mpCode').value = roomMatch[1].toUpperCase();
+      UI.showModal('mpModal');
+    }, 300);
+  }
+
   // 有未結算的場次（含已下注未開獎）→ 還原同一場；否則開新場次
   var pending = store.get('pending', null);
   if (pending && pending.seed && typeof pending.no === 'number') {

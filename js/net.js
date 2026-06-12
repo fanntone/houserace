@@ -23,6 +23,23 @@
 
   var CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // 避開易混淆字元
 
+  // ICE 設定：多組 STUN + 盡力而為的免費 TURN 中繼。
+  // 行動網路（4G/5G 的 CGNAT/對稱 NAT）只靠 STUN 打洞常失敗 →「加入沒反應、十幾秒後逾時」。
+  // TURN 走 80/443 也能繞過嚴格防火牆；憑證若失效 ICE 會自動略過該伺服器，無副作用。
+  var PEER_OPTS = {
+    debug: 0,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
+        { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443',
+                 'turns:openrelay.metered.ca:443?transport=tcp'],
+          username: 'openrelayproject', credential: 'openrelayproject' }
+      ]
+    }
+  };
+
   function code6() {
     var s = '';
     for (var i = 0; i < 6; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
@@ -65,7 +82,7 @@
     Net.myName = name;
     Net.mode = 'host';
     var code = code6();
-    var peer = new Peer('hrace-' + code, { debug: 0 });
+    var peer = new Peer('hrace-' + code, PEER_OPTS);
     Net.peer = peer;
     var ready = false;
     peer.on('open', function () {
@@ -145,9 +162,10 @@
     Net.myName = name;
     Net.mode = 'guest';
     code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    var peer = new Peer({ debug: 0 });
+    var peer = new Peer(PEER_OPTS);
     Net.peer = peer;
-    var opened = false, failed = false;
+    var opened = false, failed = false, peerOpened = false;
+    function status(t) { if (cb.onStatus) cb.onStatus(t); } // 連線進度回報（UI 顯示用）
     function fail(message, type) {
       if (opened || failed) return;
       failed = true;
@@ -158,7 +176,10 @@
         onFail(e);
       }
     }
+    status('正在連線訊號伺服器…');
     peer.on('open', function () {
+      peerOpened = true;
+      status('已連上訊號伺服器，正在與房主建立直連…');
       var conn = peer.connect('hrace-' + code, { reliable: true });
       Net.conns = [conn];
       conn.on('open', function () {
@@ -180,7 +201,11 @@
       if (err && err.type === 'peer-unavailable') fail('找不到房間 ' + code + '（房主已離線或房號錯誤）', 'peer-unavailable');
       else if (!opened) fail('連線失敗：' + (err && err.type || ''), err && err.type);
     });
-    setTimeout(function () { fail('連線逾時，請確認房號與網路'); }, 15000);
+    setTimeout(function () {
+      fail(peerOpened
+        ? '連線逾時：與房主建立直連失敗。行動網路（4G/5G）較容易失敗，建議改用 Wi-Fi（與房主同一網路最穩）再試一次。'
+        : '連線逾時：無法連上訊號伺服器，請檢查網路後再試。');
+    }, 20000);
   };
 
   function guestOnData(msg) {

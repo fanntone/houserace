@@ -528,6 +528,11 @@
 
   function mpCallbacks() {
     return {
+      // —— 連線進度（加入/重連時 net.js 回報）——
+      onStatus: function (t) {
+        mpStatusLine(t);
+        $('commentary').textContent = '📣 ' + t;
+      },
       // —— 房主側 ——
       onJoined: function (name, conn, isNew) {
         Net.sendTo(conn, mpRoundMsg(conn)); // 同步重試也會重發場次快照（冪等）
@@ -673,24 +678,46 @@
     });
   }
 
+  // 加入流程的即時回饋：行動裝置上連線可能要好幾秒，沒有進度顯示會以為「沒反應」
+  function mpStatusLine(text) {
+    var el = $('mpJoinStatus');
+    el.textContent = text;
+    el.classList.toggle('hidden', !text);
+  }
+
+  function mpJoinUiBusy(busy) {
+    $('btnMpJoin').disabled = busy;
+    $('btnMpJoin').textContent = busy ? '連線中…' : '加入房間';
+    $('btnMpHost').disabled = busy;
+  }
+
   function enterJoin(code) {
     if (typeof Peer === 'undefined') { alert('P2P 元件載入失敗'); return; }
-    if (!code || code.length < 4) { alert('請輸入正確的房號'); return; }
+    if (!code || code.replace(/\W/g, '').length < 4) { alert('請輸入正確的房號'); return; }
+    if (Game.mp.joining) return; // 防連點：一次只跑一個加入流程
     var name = mpName();
     store.set('name', name);
     mpPrep();
+    Game.mp.joining = true;
+    mpJoinUiBusy(true);
+    mpStatusLine('正在連線…');
     $('commentary').textContent = '📣 連線到房間 ' + code.toUpperCase() + '…';
     Net.join(code, name, mpCallbacks(), function () {
+      Game.mp.joining = false;
       Game.mp.active = true;
       Game.mp.host = false;
       Game.mp.code = Net.code;
       Net.lastPing = Date.now(); // 心跳寬限起點
+      mpJoinUiBusy(false);
+      mpStatusLine('');
       mpUpdateUI();
       UI.hideModal('mpModal');
       $('commentary').textContent = '📣 已加入房間，同步場次中…';
       startSyncWatchdog();
     }, function (err) {
-      alert(err.message);
+      Game.mp.joining = false;
+      mpJoinUiBusy(false);
+      mpStatusLine('⚠ ' + err.message);
       leaveMP(null);
     });
   }

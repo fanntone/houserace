@@ -559,12 +559,22 @@
     Game.mp.nonces = null;
     Game.mp.nonceOk = true;
     beginRound(round);
-    if (msg.phase !== 'betting') { // 中途加入：本場觀望，等下一場
-      Game.mp.waiting = true;
+    if (msg.phase !== 'betting') { // 中途加入/重載回房時本場已開跑
       Game.countdownEndsAt = null;
       $('countdownOverlay').classList.add('hidden');
-      setPhase('result');
-      $('commentary').textContent = '📣 本場已開跑，請稍候——下一場開始即可下注！';
+      if (msg.order) {
+        // 名次已定：直接快轉接上實況轉播（本場不能下注，結算後自動進下一場）
+        Game.mp.waiting = false;
+        mpCatchUp(msg);
+        if (Game.phase === 'racing') {
+          $('commentary').textContent = '📣 本場已開跑——已為你接上實況轉播，下一場即可下注！';
+        }
+      } else {
+        // 房主在收隨機數的短暫窗口（約 1.5 秒）：等 start 廣播直接開跑
+        Game.mp.waiting = false;
+        setPhase('result');
+        $('commentary').textContent = '📣 本場已截止下注，即將開跑…';
+      }
     } else {
       Game.mp.waiting = false;
       // 與房主對時：用房主的剩餘秒數重設本地 wall-clock 截止點，兩邊倒數一致
@@ -586,9 +596,19 @@
       $('countdown').textContent = Game.countdown;
       return;
     }
+    // 本地已結算而房主種子還沒拿到（斷線時錯過 reveal 廣播）：從快照補上，驗證不缺角
+    if (msg.hostSeed && Game.lastRound && Game.lastRound.mpData && !Game.lastRound.mpData.hostSeed) {
+      Game.lastRound.mpData.hostSeed = msg.hostSeed;
+      $('resultSeed').textContent = msg.hostSeed;
+    }
     if (Game.phase === 'result' || Game.mp.waiting) return; // 已結算/觀望中：等下一場廣播
     if (!msg.order) return; // 房主在收隨機數窗口：等 start 訊息即可
-    // 房主已開跑或已結算：套用名次補跑（編排種子同樣由雜湊+名次衍生，畫面一致）
+    mpCatchUp(msg);
+  }
+
+  // 套用快照附帶的賽果並快轉到房主目前進度：重連/重載/中途加入直接接上實況轉播
+  //（編排種子由雜湊+名次衍生，快轉後畫面跑位與全房一致）
+  function mpCatchUp(msg) {
     Game.mp.nonces = msg.nonces || [];
     Game.mp.nonceOk = !Game.mp.myNonce || Game.mp.nonces.indexOf(Game.mp.myNonce) !== -1;
     if (msg.hostSeed) Game.mp.pendingReveal = msg.hostSeed;
@@ -596,7 +616,7 @@
     Game.muteCommentary = true;
     if (!alreadyRunning) mpStartRace(msg.order);
     if (msg.hostSeed) {
-      Game.animator.skip(); // 房主已在結算畫面：直接跳到結果領彩
+      Game.animator.skip(); // 房主已在結算畫面：直接跳到結果
     } else {
       // 快轉到房主目前進度（advance 會自行吃掉出閘倒數/定格等時間）
       var target = Math.max(0, Number(msg.elapsed) || 0), guard = 0;

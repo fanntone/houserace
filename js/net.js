@@ -77,11 +77,12 @@
   };
 
   // ---------- 房主 ----------
-  Net.host = function (name, cb, onReady, onFail) {
+  // wantCode：頁面重載後用原房號重開房（客人重連得回來）；被占用時自動換新號
+  Net.host = function (name, cb, onReady, onFail, wantCode) {
     Net.cb = cb;
     Net.myName = name;
     Net.mode = 'host';
-    var code = code6();
+    var code = (wantCode && /^[A-Z0-9]{4,8}$/.test(String(wantCode))) ? String(wantCode) : code6();
     var peer = new Peer('hrace-' + code, PEER_OPTS);
     Net.peer = peer;
     var ready = false;

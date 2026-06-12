@@ -132,6 +132,8 @@
     Game.round = round;
     Game.sel = null;
     Game.amount = 0;
+    // 在房內每場更新時間戳：自動回房只在「最近還在玩」時觸發（避免隔天開遊戲突然進房）
+    if (Game.mp.active) store.set('mproom', { code: Game.mp.code, host: Game.mp.host, t: Date.now() });
     makeAnimator(round);
     finishBeginRound(round);
   }
@@ -624,12 +626,13 @@
         mpFeedLine('🔁 連線中斷後已自動重連');
         $('commentary').textContent = '📣 已重新連上房間，同步場次中…';
       }, function (err) {
-        if (err && err.type === 'peer-unavailable') {
-          giveUp('📣 房主已離線，已退還未結算注金並切回單機模式。');
-        } else if (attempt >= 3) {
-          giveUp('📣 重連失敗，已退還未結算注金並切回單機模式。');
+        // 找不到房間也重試：房主可能正在重載頁面（會用原房號重開），稍候幾秒就回來
+        if (attempt >= 3) {
+          giveUp((err && err.type === 'peer-unavailable')
+            ? '📣 房主已離線，已退還未結算注金並切回單機模式。'
+            : '📣 重連失敗，已退還未結算注金並切回單機模式。');
         } else {
-          setTimeout(tryOnce, 2000);
+          setTimeout(tryOnce, (err && err.type === 'peer-unavailable') ? 4000 : 2000);
         }
       });
     }
@@ -659,7 +662,7 @@
     $('mpFeed').innerHTML = '';
   }
 
-  function enterHost() {
+  function enterHost(wantCode) {
     if (typeof Peer === 'undefined') { alert('P2P 元件載入失敗'); return; }
     var name = mpName();
     store.set('name', name);
@@ -669,13 +672,14 @@
       Game.mp.active = true;
       Game.mp.host = true;
       Game.mp.code = code;
+      store.set('mproom', { code: code, host: true, t: Date.now() }); // 重載後自動回房用
       mpUpdateUI();
       mpNewRound();
       mpFeedLine('🏠 房間已開啟，把房號 <b>' + code + '</b> 或邀請連結傳給朋友吧！');
     }, function (err) {
       alert('開房失敗：' + (err && err.message || err && err.type || err));
       leaveMP(null);
-    });
+    }, wantCode);
   }
 
   // 加入流程的即時回饋：行動裝置上連線可能要好幾秒，沒有進度顯示會以為「沒反應」
@@ -707,6 +711,7 @@
       Game.mp.active = true;
       Game.mp.host = false;
       Game.mp.code = Net.code;
+      store.set('mproom', { code: Net.code, host: false, t: Date.now() }); // 重載後自動回房用
       Net.lastPing = Date.now(); // 心跳寬限起點
       mpJoinUiBusy(false);
       mpStatusLine('');
@@ -731,6 +736,7 @@
       store.set('balance', Game.balance);
     }
     Game.bets = [];
+    store.set('mproom', null); // 離房（含放棄重連）：清除自動回房資格
     if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
     Game.mp = { active: false, host: false, code: '', racer: null, hostSeed: null,
                 nonces: null, myNonce: null, nonceOk: true, waiting: false,
@@ -1043,6 +1049,24 @@
       $('mpCode').value = roomMatch[1].toUpperCase();
       UI.showModal('mpModal');
     }, 300);
+  }
+  // 頁面重載自動回房：行動瀏覽器常在背景回收分頁、回前景時整頁重載——
+  // 沒有這段就會默默掉回單機（自己以為還在房裡，房主名單上卻沒有你）。
+  // 房主重載則用原房號重開房，客人的自動重連會自己接回來。
+  var mproom = store.get('mproom', null);
+  if (mproom && mproom.code && Date.now() - (mproom.t || 0) < 10 * 60 * 1000) {
+    setTimeout(function () {
+      if (Game.mp.active || Game.mp.joining) return;
+      $('mpName').value = store.get('name', '');
+      if (mproom.host) {
+        enterHost(mproom.code);
+      } else {
+        $('mpCode').value = mproom.code;
+        enterJoin(mproom.code);
+      }
+    }, 600);
+  } else if (mproom) {
+    store.set('mproom', null); // 太久以前的房間：不自動回房
   }
 
   // 有未結算的場次（含已下注未開獎）→ 還原同一場；否則開新場次

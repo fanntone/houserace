@@ -64,6 +64,8 @@
 <script>var NetGuest = window.Net;</script>
 <script src="../js/net.js"></script>
 <script>var NetGuest2 = window.Net;</script>
+<script src="../js/net.js"></script>
+<script>var NetHost2 = window.Net;</script>
 <script>
 // 完整協定走一遍：開房→加入→場次→下注→鎖注→隨機數→開跑→揭示驗證
 var log = [], failed = false;
@@ -171,12 +173,23 @@ function testReconnect() {
       ok('同 cid 重連：舊連線被踢、線上人數仍為 2', NetHost.count() === 2);
       ok('舊客人端收到斷線事件（觸發自動重連流程）', state.gotLeft === true);
       ok('重連客人收到場次快照', state.guest2Round === true);
-      done();
+      testWantCode();
     }, 60);
   }, function (err) {
     ok('重連失敗：' + err.message, false);
     done();
   });
+}
+
+// 房主重載復原：用指定房號重開房（客人重連才接得回來）
+function testWantCode() {
+  NetHost2.host('重載房主', {}, function (code) {
+    ok('指定房號重開房（頁面重載復原）', code === 'TESTAA');
+    done();
+  }, function () {
+    ok('指定房號開房失敗', false);
+    done();
+  }, 'TESTAA');
 }
 
 setTimeout(function () { // 保險：5 秒未完成視為失敗

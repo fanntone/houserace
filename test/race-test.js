@@ -46,6 +46,31 @@ var failures = 0;
   if (!ok) failures++;
 });
 
+// 3.5) 種子化編排：同 opts.rand 種子 → 兩個動畫器的時序/跑法完全一致
+//      （多人模式各端用 hash+名次衍生同一種子，畫面跑位才會同步）
+var RNG = require('../js/rng.js');
+(function () {
+  var r = Model.buildRound('a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4', 8, 1.0);
+  var seed = RNG.sha256(r.hash + '|' + r.finishOrder.join(','));
+  function mk() {
+    return new RaceAnimator(fakeCanvas, r.horses, r.finishOrder,
+      { duration: 38, rand: RNG.seededRand(seed) });
+  }
+  var a = mk(), b = mk();
+  var same = a.T.join() === b.T.join();
+  for (var i = 0; i < 8 && same; i++) {
+    var pa = a.pace[i], pb = b.pace[i];
+    if (pa.base !== pb.base || pa.amp !== pb.amp || pa.f !== pb.f || pa.ph !== pb.ph) same = false;
+  }
+  // 不同名次 → 不同種子（編排不該跨場沿用）
+  var c = new RaceAnimator(fakeCanvas, r.horses, r.finishOrder,
+    { duration: 38, rand: RNG.seededRand(RNG.sha256(r.hash + '|other')) });
+  var differs = a.T.join() !== c.T.join();
+  console.log((same ? '  ✓ ' : '  ✗ ') + '同種子編排一致（多人跑位同步）');
+  console.log((differs ? '  ✓ ' : '  ✗ ') + '異種子編排相異');
+  if (!same || !differs) failures++;
+})();
+
 // 4) start → 動畫迴圈 → onFinish 鏈路（以假 rAF 快轉，每幀推進 100ms）
 global.requestAnimationFrame = function (cb) {
   return setImmediate(function () { vTime += 100; cb(vTime); });

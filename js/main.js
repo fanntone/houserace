@@ -141,6 +141,9 @@
     if (Game.animator) Game.animator.stop();
     var order = round.finishOrder || round.horses.map(function (_, i) { return i; });
     var animOpts = {
+      // 編排種子＝雜湊+名次衍生：多人各端可自行算出同一套（畫面跑位一致），
+      // 雜湊在下注前已公開、名次在重建動畫器時已是公開資訊，無洩漏
+      rand: RNG.seededRand(RNG.sha256(round.hash + '|' + order.join(','))),
       duration: Game.settings.duration,
       racerType: (Game.mp.active && Game.mp.racer) ? Game.mp.racer : Game.settings.racer,
       infieldText: '第 ' + round.no + ' 場',
@@ -343,6 +346,8 @@
     $('mpSolo').classList.toggle('hidden', on);
     $('mpIn').classList.toggle('hidden', !on);
     $('btnMp').classList.toggle('mp-on', on);
+    // 客人不能提前開賽（開賽時機由房主控制）
+    $('btnStartNow').classList.toggle('hidden', on && !Game.mp.host);
     if (on) {
       $('mpCodeShow').textContent = Game.mp.code;
       $('mpStatus').textContent = '🌐 房間 ' + Game.mp.code +
@@ -369,7 +374,8 @@
       horses: Game.round.horses.map(function (h) {
         return { num: h.num, name: h.name, strength: h.strength };
       }),
-      countdown: Game.phase === 'betting' ? Game.countdown : 0,
+      countdown: (Game.phase === 'betting' && Game.countdownEndsAt)
+        ? Math.max(0, (Game.countdownEndsAt - Date.now()) / 1000) : 0,
       phase: Game.phase === 'betting' ? 'betting' : 'waiting'
     };
   }
@@ -411,11 +417,9 @@
     hideTicket();
     renderBets();
     $('countdownOverlay').classList.add('hidden');
-    $('speedCtrl').classList.remove('hidden');
+    // 多人不開放加速/跳至結果：本地變速會讓畫面與全房不同步（賽果仍一致）
+    $('speedCtrl').classList.add('hidden');
     Game.animator.setSpeed(1);
-    document.querySelectorAll('#speedCtrl .spd').forEach(function (b) {
-      b.classList.toggle('active', b.dataset.speed === '1');
-    });
     Game.animator.start();
   }
 
@@ -460,7 +464,11 @@
       $('commentary').textContent = '📣 本場已開跑，請稍候——下一場開始即可下注！';
     } else {
       Game.mp.waiting = false;
-      Game.countdown = Math.max(5, msg.countdown | 0);
+      // 與房主對時：用房主的剩餘秒數重設本地 wall-clock 截止點，兩邊倒數一致
+      // （beginRound 預設整段下注時間，中途加入不重設會從頭數）
+      var cd = Math.max(0, Number(msg.countdown) || 0);
+      Game.countdown = Math.ceil(cd);
+      Game.countdownEndsAt = Date.now() + cd * 1000;
       $('countdown').textContent = Game.countdown;
     }
   }
@@ -624,7 +632,11 @@
     });
     $('btnConfirmBet').addEventListener('click', confirmBet);
 
-    $('btnStartNow').addEventListener('click', startRace);
+    $('btnStartNow').addEventListener('click', function () {
+      // 多人：房主走鎖注廣播（全房同步開跑）；客人此鈕已隱藏
+      if (Game.mp.active) { if (Game.mp.host) mpLock(); return; }
+      startRace();
+    });
     document.querySelectorAll('#speedCtrl .spd').forEach(function (btn) {
       btn.addEventListener('click', function () {
         Game.animator.setSpeed(parseInt(btn.dataset.speed, 10));

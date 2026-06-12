@@ -67,13 +67,16 @@
 
   RaceAnimator.prototype._setupRace = function () {
     var D = this.duration, n = this.horses.length;
+    // 編排隨機源：多人模式傳入種子化 PRNG（全房算出同一套間隔/跑法 → 畫面一致），
+    // 未傳入時退回 Math.random（單機行為不變）
+    var rand = this.opts.rand || Math.random;
     var T = new Array(n);
     var t = D;
     for (var rank = 0; rank < n; rank++) {
       if (rank > 0) {
         // 名次間隔：1/4 機率是相片裁判等級的貼身差距
-        t += (Math.random() < 0.25) ? (0.02 + Math.random() * 0.08)
-                                    : (0.10 + Math.random() * 0.45);
+        t += (rand() < 0.25) ? (0.02 + rand() * 0.08)
+                             : (0.10 + rand() * 0.45);
       }
       T[this.finishOrder[rank]] = t;
     }
@@ -89,13 +92,13 @@
     this._goFlash = 0;    // 出閘瞬間「開跑！」爆閃
     this.pace = [];
     for (var i = 0; i < n; i++) {
-      var style = Math.random();                       // 跑法：0 逃馬（貼前）→ 1 後追
+      var style = rand();                              // 跑法：0 逃馬（貼前）→ 1 後追
       var gateInner = (n - 1 - i) / Math.max(1, n - 1); // 閘位：1 號最內 = 1
       this.pace.push({
         base: Math.max(0.0005, 0.002 + style * 0.010 - gateInner * 0.003), // 中段深度（內側省地利）
-        amp: 0.0012 + Math.random() * 0.0024,           // 集團內小幅消長（無突兀加速）
-        f: 0.5 + Math.random() * 0.7,
-        ph: Math.random() * Math.PI * 2,
+        amp: 0.0012 + rand() * 0.0024,                  // 集團內小幅消長（無突兀加速）
+        f: 0.5 + rand() * 0.7,
+        ph: rand() * Math.PI * 2,
         G: this._W(this.T[i] / this.T0) - 1             // 最終差距（含起步加速曲線，保證精準壓線）
       });
     }

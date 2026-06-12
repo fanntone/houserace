@@ -143,6 +143,11 @@
       if (Net.cb.onBetFeed) Net.cb.onBetFeed(feed.who, msg.bet);
     } else if (msg.t === 'nonce') {
       if (Net.cb.onNonce) Net.cb.onNonce(conn.peer, String(msg.v || '').slice(0, 64));
+    } else if (msg.t === 'result') {
+      // 戰績互報：客人的本場下注/派彩 → 轉發全房（社交樂趣：看得到誰輸誰贏）
+      var rf = { t: 'resultfeed', who: conn._name || '玩家', bet: msg.bet | 0, win: msg.win | 0 };
+      Net.broadcast(rf);
+      if (Net.cb.onResultFeed) Net.cb.onResultFeed(rf.who, rf.bet, rf.win);
     } else if (msg.t === 'pong') {
       conn._seen = Date.now();
     }
@@ -223,6 +228,7 @@
     else if (msg.t === 'lock' && cb.onLock) cb.onLock();
     else if (msg.t === 'start' && cb.onStart) cb.onStart(msg);
     else if (msg.t === 'reveal' && cb.onReveal) cb.onReveal(msg);
+    else if (msg.t === 'resultfeed' && cb.onResultFeed) cb.onResultFeed(msg.who, msg.bet | 0, msg.win | 0);
   }
 
   // ---------- 共用 ----------
@@ -244,6 +250,17 @@
 
   Net.sendNonce = function (v) {
     if (Net.mode === 'guest') Net.broadcast({ t: 'nonce', v: v });
+  };
+
+  // 結算戰績：本場下注總額與派彩總額（客人交給房主轉發；房主直接廣播）
+  Net.sendResult = function (bet, win) {
+    if (Net.mode === 'guest') {
+      Net.broadcast({ t: 'result', bet: bet, win: win });
+    } else if (Net.mode === 'host') {
+      var rf = { t: 'resultfeed', who: Net.myName, bet: bet | 0, win: win | 0 };
+      Net.broadcast(rf);
+      if (Net.cb.onResultFeed) Net.cb.onResultFeed(rf.who, rf.bet, rf.win);
+    }
   };
 
   // 客人：同步重試（場次快照沒送到時重新請求；房主端冪等）

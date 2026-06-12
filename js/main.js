@@ -134,6 +134,7 @@
     Game.amount = 0;
     // 在房內每場更新時間戳：自動回房只在「最近還在玩」時觸發（避免隔天開遊戲突然進房）
     if (Game.mp.active) store.set('mproom', { code: Game.mp.code, host: Game.mp.host, t: Date.now() });
+    Game.mp.results = []; // 全房戰績逐場重計
     makeAnimator(round);
     finishBeginRound(round);
   }
@@ -292,6 +293,8 @@
         nonceOk: Game.mp.nonceOk
       };
       if (Game.mp.host) Net.broadcast({ t: 'reveal', hostSeed: Game.mp.hostSeed });
+      // 戰績互報：本場下注/派彩廣播全房（結果面板顯示誰輸誰贏）
+      Net.sendResult(res.totalStake, res.totalPayout);
     }
     // 機台式持續循環：結果顯示 10 秒後自動開下一場（房主與單機；客人由房主廣播帶動）
     if (!Game.mp.active || Game.mp.host) {
@@ -301,6 +304,7 @@
 
     setPhase('result');
     updateBalance();
+    renderMpResults(); // 多人顯示全房戰績（陸續送達即時更新）；單機隱藏
     UI.renderRankBoard($('rankBoard'), round.horses, round.finishOrder, round.market, true);
     $('fairSeedWrap').classList.remove('hidden');
     $('fairSeed').textContent = round.seed || (round.mpData && round.mpData.hostSeed) || '（多人場次）';
@@ -335,12 +339,40 @@
       ('玩家' + Math.floor(Math.random() * 900 + 100));
   }
 
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
   function mpFeedLine(html) {
     var feed = $('mpFeed');
     var d = document.createElement('div');
     d.innerHTML = html;
     feed.insertBefore(d, feed.firstChild);
-    while (feed.children.length > 5) feed.removeChild(feed.lastChild);
+    while (feed.children.length > 8) feed.removeChild(feed.lastChild);
+  }
+
+  // 全房戰績表（結果面板）：各家本場下注/派彩/淨額，贏家排前
+  function renderMpResults() {
+    var el = $('mpResults');
+    var list = Game.mp.results || [];
+    if (!Game.mp.active || !list.length) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    var rows = list.slice().sort(function (a, b) { return (b.win - b.bet) - (a.win - a.bet); })
+      .map(function (r) {
+        var net = r.win - r.bet;
+        return '<tr class="' + (net > 0 ? 'won' : r.bet ? 'lost' : '') + '"><td>' + esc(r.who) + '</td>' +
+          '<td>' + (r.bet ? UI.money(r.bet) : '—') + '</td>' +
+          '<td>' + (r.bet ? UI.money(r.win) : '—') + '</td>' +
+          '<td><span class="' + (net >= 0 ? 'net-pos' : 'net-neg') + '">' +
+          (net >= 0 ? '+' : '−') + UI.money(Math.abs(net)) + '</span></td></tr>';
+      }).join('');
+    el.innerHTML = '<table class="result-table"><tr><th>🏠 全房戰績</th><th>下注</th><th>派彩</th><th>本場</th></tr>' + rows + '</table>';
+    el.classList.remove('hidden');
   }
 
   function mpUpdateUI() {
@@ -549,6 +581,21 @@
       onBetFeed: function (who, bet) {
         if (bet) mpFeedLine('💰 <b>' + who + '</b> 下注 ' + Betting.describeBet(bet) +
           ' ×' + UI.money(bet.amount));
+      },
+      // —— 戰績互報（全房）——
+      onResultFeed: function (who, bet, win) {
+        var list = Game.mp.results = Game.mp.results || [];
+        var entry = null;
+        for (var i = 0; i < list.length; i++) if (list[i].who === who) entry = list[i];
+        if (entry) { entry.bet = bet; entry.win = win; } // 重送保護：同名覆蓋
+        else {
+          list.push({ who: who, bet: bet, win: win });
+          var net = win - bet;
+          mpFeedLine((net > 0 ? '🏆' : bet ? '💸' : '👀') + ' <b>' + esc(who) + '</b> 本場' +
+            (bet ? '下注 ' + UI.money(bet) + '、派彩 ' + UI.money(win) +
+              '（' + (net >= 0 ? '+' : '−') + UI.money(Math.abs(net)) + '）' : '純觀賽'));
+        }
+        renderMpResults();
       },
       // —— 客人側 ——
       onRound: mpApplyRound,

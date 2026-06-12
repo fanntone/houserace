@@ -143,6 +143,10 @@ NetHost.host('測試房主', {
       ok('房主側名次與客人一致', state.hostOrder.join(',') === state.guestOrder.join(','));
       ok('注單動態房主側也收到', state.feeds >= 1);
       ok('線上人數 = 2', state.hostPlayers === 2);
+      NetGuest.sendResult(100, 450); // 戰績互報：客人送出本場下注/派彩
+    },
+    onResultFeed: function (who, bet, win) {
+      ok('戰績互報：收到自己的本場結果回播', who === '小貓' && bet === 100 && win === 450);
       testReconnect();
     },
     onLeft: function () {

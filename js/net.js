@@ -17,6 +17,7 @@
     players: [],   // {id, name, betCount, betTotal}
     code: '',
     myName: '玩家',
+    cid: '',       // 穩定客戶端識別（由 app 設定）：同一人斷線重連時房主據此去重
     cb: {}         // onJoined(name,conn) onPlayers onRound onBetFeed onLock onStart onReveal onLeft onNonce
   };
 
@@ -94,6 +95,17 @@
     if (msg.t === 'hello') {
       // 冪等：客人同步重試會重發 hello，不重複加人、但會重發場次快照
       conn._name = String(msg.name || '玩家').slice(0, 12) || '玩家';
+      conn._cid = String(msg.cid || '');
+      // 同一玩家重連（手機鎖屏/網路抖動後重入）：踢掉舊連線，名單不留殭屍
+      if (conn._cid) {
+        for (var k = Net.conns.length - 1; k >= 0; k--) {
+          var oldC = Net.conns[k];
+          if (oldC !== conn && oldC._cid === conn._cid) {
+            try { oldC.close(); } catch (e2) {}
+            hostDropConn(oldC);
+          }
+        }
+      }
       if (Net.conns.indexOf(conn) === -1) Net.conns.push(conn);
       var existing = findPlayer(conn.peer);
       var isNew = !existing;
@@ -136,11 +148,15 @@
     var peer = new Peer({ debug: 0 });
     Net.peer = peer;
     var opened = false, failed = false;
-    function fail(message) {
+    function fail(message, type) {
       if (opened || failed) return;
       failed = true;
       Net.leaveSilent();
-      if (onFail) onFail(new Error(message));
+      if (onFail) {
+        var e = new Error(message);
+        e.type = type || ''; // 重連流程靠它分辨「房主真不在」與暫時性失敗
+        onFail(e);
+      }
     }
     peer.on('open', function () {
       var conn = peer.connect('hrace-' + code, { reliable: true });
@@ -148,7 +164,7 @@
       conn.on('open', function () {
         opened = true;
         Net.code = code;
-        send(conn, { t: 'hello', name: name, ver: global.APP_BUILD || '' });
+        send(conn, { t: 'hello', name: name, ver: global.APP_BUILD || '', cid: Net.cid });
         onReady();
       });
       conn.on('data', function (msg) { guestOnData(msg); });
@@ -161,8 +177,8 @@
       });
     });
     peer.on('error', function (err) {
-      if (err && err.type === 'peer-unavailable') fail('找不到房間 ' + code + '（房主已離線或房號錯誤）');
-      else if (!opened) fail('連線失敗：' + (err && err.type || ''));
+      if (err && err.type === 'peer-unavailable') fail('找不到房間 ' + code + '（房主已離線或房號錯誤）', 'peer-unavailable');
+      else if (!opened) fail('連線失敗：' + (err && err.type || ''), err && err.type);
     });
     setTimeout(function () { fail('連線逾時，請確認房號與網路'); }, 15000);
   };
@@ -207,7 +223,7 @@
   // 客人：同步重試（場次快照沒送到時重新請求；房主端冪等）
   Net.resendHello = function () {
     if (Net.mode === 'guest') {
-      Net.broadcast({ t: 'hello', name: Net.myName, ver: global.APP_BUILD || '' });
+      Net.broadcast({ t: 'hello', name: Net.myName, ver: global.APP_BUILD || '', cid: Net.cid });
     }
   };
 

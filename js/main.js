@@ -34,7 +34,8 @@
     lastRound: null,
     // 多人房間狀態（P2P）：host=房主（其瀏覽器即伺服器）
     mp: { active: false, host: false, code: '', racer: null, hostSeed: null,
-          nonces: null, myNonce: null, nonceOk: true, waiting: false },
+          nonces: null, myNonce: null, nonceOk: true, waiting: false,
+          reconnecting: false, needReconnect: false },
     bets: [],
     betType: 'win',
     sel: null,
@@ -365,7 +366,7 @@
   }
 
   function mpRoundMsg(forConn) {
-    return {
+    var msg = {
       t: 'round',
       no: Game.round.no,
       hash: Game.round.hash,
@@ -378,6 +379,15 @@
         ? Math.max(0, (Game.countdownEndsAt - Date.now()) / 1000) : 0,
       phase: Game.phase === 'betting' ? 'betting' : 'waiting'
     };
+    // 補課資料（斷線重連用）：賽果已定就附名次與隨機數，
+    // 比賽中再附已跑秒數（重連者快轉到同步進度）、已結算附種子（直接領彩）
+    if (Game.phase !== 'betting' && Game.round.finishOrder) {
+      msg.order = Game.round.finishOrder;
+      msg.nonces = Game.mp.nonces || [];
+      if (Game.phase === 'result') msg.hostSeed = Game.mp.hostSeed;
+      else if (Game.animator && Game.animator.running) msg.elapsed = Game.animator.raceTime;
+    }
+    return msg;
   }
 
   // 房主開新場：種子只決定馬匹盤口，名次等全員隨機數混合後才產生
@@ -429,6 +439,11 @@
     if (Game.mp.synced && Game.round && msg.no === Game.round.no) return;
     Game.mp.synced = true;
     if (Game.mp.syncTimer) { clearInterval(Game.mp.syncTimer); Game.mp.syncTimer = null; }
+    // 斷線重連回到同一場（場次號+雜湊都吻合）：保留本地注單，只補課接上進度
+    if (Game.round && msg.no === Game.round.no && msg.hash === Game.round.hash) {
+      mpResync(msg);
+      return;
+    }
     // 若上一場動畫還沒跑完（例如剛從背景回來），先瞬間結算再進新場，注金不蒸發
     if (Game.phase === 'racing' && Game.animator && Game.animator.running) {
       Game.muteCommentary = true;
@@ -450,6 +465,13 @@
       finishOrder: null
     };
     Game.roundCounter = msg.no;
+    // 重連回來時房主已換場：原注單無從結算，退還注金（正常換場時這裡必為空或已結算）
+    if (Game.bets.length && Game.phase !== 'result') {
+      var refund = 0;
+      Game.bets.forEach(function (b) { refund += b.amount; });
+      Game.balance += refund;
+      store.set('balance', Game.balance);
+    }
     Game.bets = [];
     Game.mp.racer = msg.racer || 'horse';
     Game.mp.myNonce = null;
@@ -471,6 +493,37 @@
       Game.countdownEndsAt = Date.now() + cd * 1000;
       $('countdown').textContent = Game.countdown;
     }
+  }
+
+  // 斷線重連補課：回到同一場時依房主目前階段把本地接上（注單與錢包都保住）
+  function mpResync(msg) {
+    if (msg.phase === 'betting') {
+      if (Game.phase !== 'betting') return; // 本地已越過下注階段，等開跑/換場訊息
+      var cd = Math.max(0, Number(msg.countdown) || 0);
+      Game.countdown = Math.ceil(cd);
+      Game.countdownEndsAt = Date.now() + cd * 1000;
+      $('countdown').textContent = Game.countdown;
+      return;
+    }
+    if (Game.phase === 'result' || Game.mp.waiting) return; // 已結算/觀望中：等下一場廣播
+    if (!msg.order) return; // 房主在收隨機數窗口：等 start 訊息即可
+    // 房主已開跑或已結算：套用名次補跑（編排種子同樣由雜湊+名次衍生，畫面一致）
+    Game.mp.nonces = msg.nonces || [];
+    Game.mp.nonceOk = !Game.mp.myNonce || Game.mp.nonces.indexOf(Game.mp.myNonce) !== -1;
+    if (msg.hostSeed) Game.mp.pendingReveal = msg.hostSeed;
+    var alreadyRunning = Game.animator && Game.animator.running && Game.round.finishOrder;
+    Game.muteCommentary = true;
+    if (!alreadyRunning) mpStartRace(msg.order);
+    if (msg.hostSeed) {
+      Game.animator.skip(); // 房主已在結算畫面：直接跳到結果領彩
+    } else {
+      // 快轉到房主目前進度（advance 會自行吃掉出閘倒數/定格等時間）
+      var target = Math.max(0, Number(msg.elapsed) || 0), guard = 0;
+      while (Game.animator.running && Game.animator.raceTime < target && guard++ < 600) {
+        Game.animator.advance(0.5);
+      }
+    }
+    Game.muteCommentary = false;
   }
 
   function mpCallbacks() {
@@ -520,13 +573,71 @@
         }
       },
       onLeft: function () {
-        leaveMP('📣 房主已離線，已退還本場注金並切回單機模式。');
+        // 連線斷掉先嘗試自動重連（房主真離線時重連會快速失敗→退房退注金）；
+        // 背景中不重連（行動裝置整頁暫停，計時器不可靠），回前景再處理
+        if (document.hidden) { Game.mp.needReconnect = true; return; }
+        mpReconnect();
       }
     };
   }
 
+  // 客人同步看門狗：場次快照偶發遺失時自動重新請求（房主端冪等）
+  function startSyncWatchdog() {
+    Game.mp.synced = false;
+    if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
+    Game.mp.syncTimer = setInterval(function () {
+      if (!Game.mp.active || Game.mp.synced) {
+        clearInterval(Game.mp.syncTimer);
+        Game.mp.syncTimer = null;
+        return;
+      }
+      Net.resendHello();
+      $('commentary').textContent = '📣 同步場次中…（重試）';
+    }, 2500);
+  }
+
+  // 斷線自動重連：手機鎖屏、網路抖動很常見——先試著回原房間，多次失敗才退房。
+  // 回到同一場由 mpResync 補課（注單保留）；房主已換場則退還原注金再進新場。
+  function mpReconnect() {
+    if (!Game.mp.active || Game.mp.host || Game.mp.reconnecting) return;
+    Game.mp.reconnecting = true;
+    if (Game.mp.syncTimer) { clearInterval(Game.mp.syncTimer); Game.mp.syncTimer = null; }
+    var code = Game.mp.code, name = Net.myName || mpName(), attempt = 0;
+    Net.leaveSilent();
+    function giveUp(text) {
+      Game.mp.reconnecting = false;
+      if (Game.mp.active) leaveMP(text);
+    }
+    function tryOnce() {
+      if (!Game.mp.active || !Game.mp.reconnecting) return;
+      attempt++;
+      $('commentary').textContent = '📣 連線中斷，重連房間 ' + code + ' 中…（第 ' + attempt + ' 次）';
+      Net.join(code, name, mpCallbacks(), function () {
+        Game.mp.reconnecting = false;
+        Net.lastPing = Date.now();
+        startSyncWatchdog();
+        mpFeedLine('🔁 連線中斷後已自動重連');
+        $('commentary').textContent = '📣 已重新連上房間，同步場次中…';
+      }, function (err) {
+        if (err && err.type === 'peer-unavailable') {
+          giveUp('📣 房主已離線，已退還未結算注金並切回單機模式。');
+        } else if (attempt >= 3) {
+          giveUp('📣 重連失敗，已退還未結算注金並切回單機模式。');
+        } else {
+          setTimeout(tryOnce, 2000);
+        }
+      });
+    }
+    tryOnce();
+  }
+
   // 進房前收拾單機狀態：退還未結算注金、清掉斷線還原點與各種截止時刻
   function mpPrep() {
+    // 穩定客戶端識別：同一瀏覽器固定一組，斷線重連時房主據此踢舊連線去重
+    if (!Net.cid) {
+      Net.cid = store.get('cid', '') || RNG.randomSeedHex().slice(0, 12);
+      store.set('cid', Net.cid);
+    }
     if (Game.phase !== 'result' && Game.bets.length) {
       var refund = 0;
       Game.bets.forEach(function (b) { refund += b.amount; });
@@ -573,22 +684,11 @@
       Game.mp.active = true;
       Game.mp.host = false;
       Game.mp.code = Net.code;
-      Game.mp.synced = false;
       Net.lastPing = Date.now(); // 心跳寬限起點
       mpUpdateUI();
       UI.hideModal('mpModal');
       $('commentary').textContent = '📣 已加入房間，同步場次中…';
-      // 同步看門狗：場次快照偶發遺失時自動重新請求（房主端冪等）
-      if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
-      Game.mp.syncTimer = setInterval(function () {
-        if (!Game.mp.active || Game.mp.synced) {
-          clearInterval(Game.mp.syncTimer);
-          Game.mp.syncTimer = null;
-          return;
-        }
-        Net.resendHello();
-        $('commentary').textContent = '📣 同步場次中…（重試）';
-      }, 2500);
+      startSyncWatchdog();
     }, function (err) {
       alert(err.message);
       leaveMP(null);
@@ -607,7 +707,8 @@
     if (Game.mp.syncTimer) clearInterval(Game.mp.syncTimer);
     Game.mp = { active: false, host: false, code: '', racer: null, hostSeed: null,
                 nonces: null, myNonce: null, nonceOk: true, waiting: false,
-                synced: false, syncTimer: null, startAt: null, pendingReveal: null };
+                synced: false, syncTimer: null, startAt: null, pendingReveal: null,
+                reconnecting: false, needReconnect: false };
     Game.autoNextAt = null;
     mpUpdateUI();
     UI.hideModal('resultModal');
@@ -812,19 +913,34 @@
         }
       }
     }
-    // 心跳：房主每 2 秒廣播並清理失聯客人；客人 8 秒沒心跳 → 判定房主離線
+    // 心跳：房主每 2 秒廣播並清理失聯客人（寬限 25s，行動網路抖動/短暫背景不誤殺）；
+    // 客人前景下 12 秒沒心跳 → 自動重連（多次失敗才退房）。背景不判定（整頁可能被暫停）
     if (Game.mp.active) {
       if (Game.mp.host) {
         if (!Game._lastPingOut || now - Game._lastPingOut >= 2000) {
           Game._lastPingOut = now;
-          Net.heartbeat(10000);
+          Net.heartbeat(25000);
         }
-      } else if (Net.lastPing && now - Net.lastPing > 8000) {
-        leaveMP('📣 房主失去連線，已退還未結算注金並切回單機模式。');
+      } else if (!document.hidden && !Game.mp.reconnecting &&
+                 Net.lastPing && now - Net.lastPing > 12000) {
+        mpReconnect();
       }
     }
     Game._lastDl = now;
   }
+
+  // 回到前景：行動裝置鎖屏/切 App 會把整頁暫停，心跳必然過期——
+  // 先給寬限並催一次快照（房主若已換場會立刻補上）；連線已死則執行延後的重連
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden || !Game.mp.active || Game.mp.host) return;
+    if (Game.mp.needReconnect) {
+      Game.mp.needReconnect = false;
+      mpReconnect();
+    } else {
+      Net.lastPing = Date.now();
+      Net.resendHello();
+    }
+  });
 
   var ticker = null;
   try {

@@ -62,6 +62,8 @@
 <script>var NetHost = window.Net;</script>
 <script src="../js/net.js"></script>
 <script>var NetGuest = window.Net;</script>
+<script src="../js/net.js"></script>
+<script>var NetGuest2 = window.Net;</script>
 <script>
 // 完整協定走一遍：開房→加入→場次→下注→鎖注→隨機數→開跑→揭示驗證
 var log = [], failed = false;
@@ -78,7 +80,10 @@ function done() {
 var hostSeed = RNG.randomSeedHex();
 var mpRound = Model.buildRoundMP(hostSeed, 8, 1.0);
 var hostNonce = 'aabb00', guestNonce = 'cafe1234';
-var state = { guestRound: null, guestOrder: null, guestNonces: null, feeds: 0, locks: 0 };
+var state = { guestRound: null, guestOrder: null, guestNonces: null, feeds: 0, locks: 0,
+              code: '', expectLeft: false, gotLeft: false, guest2Round: false };
+NetGuest.cid = 'cid-cat';
+NetGuest2.cid = 'cid-cat'; // 同一人重連：cid 相同
 
 NetHost.host('測試房主', {
   onJoined: function (name, conn) {
@@ -102,6 +107,7 @@ NetHost.host('測試房主', {
   }
 }, function (code) {
   ok('開房成功，房號 ' + code, /^[A-Z2-9]{6}$/.test(code));
+  state.code = code;
 
   NetGuest.join(code, '小貓', {
     onRound: function (msg) {
@@ -135,9 +141,12 @@ NetHost.host('測試房主', {
       ok('房主側名次與客人一致', state.hostOrder.join(',') === state.guestOrder.join(','));
       ok('注單動態房主側也收到', state.feeds >= 1);
       ok('線上人數 = 2', state.hostPlayers === 2);
-      done();
+      testReconnect();
     },
-    onLeft: function () { ok('不應觸發 onLeft', false); done(); }
+    onLeft: function () {
+      state.gotLeft = true;
+      if (!state.expectLeft) { ok('不應觸發 onLeft', false); done(); }
+    }
   }, function () {
     ok('客人連線成功', true);
   }, function (err) {
@@ -148,6 +157,27 @@ NetHost.host('測試房主', {
   ok('開房失敗', false);
   done();
 });
+
+// 模擬同一玩家斷線重連（同 cid 重入）：房主應踢舊連線、名單不重複、重連者拿到快照
+function testReconnect() {
+  state.expectLeft = true;
+  NetGuest2.join(state.code, '小貓', {
+    onRound: function (msg) {
+      state.guest2Round = (msg.no === 1 && msg.hash === mpRound.hash);
+    },
+    onLeft: function () {}
+  }, function () {
+    setTimeout(function () {
+      ok('同 cid 重連：舊連線被踢、線上人數仍為 2', NetHost.count() === 2);
+      ok('舊客人端收到斷線事件（觸發自動重連流程）', state.gotLeft === true);
+      ok('重連客人收到場次快照', state.guest2Round === true);
+      done();
+    }, 60);
+  }, function (err) {
+    ok('重連失敗：' + err.message, false);
+    done();
+  });
+}
 
 setTimeout(function () { // 保險：5 秒未完成視為失敗
   if (!document.getElementById('final')) { ok('逾時未完成', false); done(); }
